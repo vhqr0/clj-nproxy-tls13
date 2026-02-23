@@ -1,7 +1,5 @@
 (ns clj-nproxy.plugin.tls13.crypto
-  (:require [clj-nproxy.bytes :as b]
-            [clj-nproxy.struct :as st]
-            [clj-nproxy.crypto :as crypto]
+  (:require [clj-nproxy.crypto :as crypto]
             [clj-nproxy.plugin.tls13.crypto.ecformat :as ecformat]))
 
 ;;; cipher suites

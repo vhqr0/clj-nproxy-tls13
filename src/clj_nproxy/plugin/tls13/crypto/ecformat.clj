@@ -7,70 +7,14 @@
 
 (set! clojure.core/*warn-on-reflection* true)
 
-(defn reverse-bytes
-  "Reverse bytes."
-  ^bytes [^bytes b]
-  (let [b (bytes b)
-        l (alength b)
-        nb (byte-array l)]
-    (dotimes [i l]
-      (aset nb i (aget b (- l i 1))))
-    nb))
-
-^:rct/test
-(comment
-  (seq (reverse-bytes (byte-array [1 2 3]))) ; => [3 2 1]
-  )
-
-(defn left-pad-bytes
-  "Left pad bytes."
-  ^bytes [^bytes b ^long len]
-  (let [plen (- len (b/length b))]
-    (cond->> b
-      (pos? plen) (b/cat (byte-array plen)))))
-
-(defn right-pad-bytes
-  "Right pad bytes."
-  ^bytes [^bytes b ^long len]
-  (let [plen (- len (b/length b))]
-    (cond-> b
-      (pos? plen) (b/cat (byte-array plen)))))
-
-^:rct/test
-(comment
-  (seq (left-pad-bytes (byte-array [1 2 3]) 4)) ; => [0 1 2 3]
-  (seq (right-pad-bytes (byte-array [1 2 3]) 4)) ; => [1 2 3 0]
-  )
-
-(defn left-cut-bytes
-  "Left cut bytes."
-  ^bytes [^bytes b ^long len]
-  (let [l (b/length b)]
-    (if (<= l len)
-      b
-      (b/copy-of-range b (- l len) l))))
-
-(defn right-cut-bytes
-  "Right cut bytes."
-  ^bytes [^bytes b ^long len]
-  (if (<= (b/length b) len)
-    b
-    (b/copy-of b len)))
-
-^:rct/test
-(comment
-  (seq (left-cut-bytes (byte-array [1 2 3]) 2)) ; => [2 3]
-  (seq (right-cut-bytes (byte-array [1 2 3]) 2)) ; => [1 2]
-  )
-
 ;;; ec
 
 (defn ec-pub->bytes
   "Convert ec public key to bytes."
   ^bytes [len ^ECPublicKey pub]
   (let [^ECPoint w (.getW pub)
-        x (-> (.toByteArray (.getAffineX w)) (left-pad-bytes len) (left-cut-bytes len))
-        y (-> (.toByteArray (.getAffineY w)) (left-pad-bytes len) (left-cut-bytes len))]
+        x (-> (.toByteArray (.getAffineX w)) (b/left-align len))
+        y (-> (.toByteArray (.getAffineY w)) (b/left-align len))]
     (b/cat (byte-array [4]) x y)))
 
 (defn bytes->ec-pub
@@ -101,7 +45,7 @@
   "Convert xec public key to bytes."
   ^bytes [len ^XECPublicKey pub]
   (let [be-bytes (.toByteArray (.getU pub))
-        le-bytes (-> be-bytes reverse-bytes (right-pad-bytes len))]
+        le-bytes (-> be-bytes b/reverse (b/right-align len))]
     (if (= len (count le-bytes))
       le-bytes
       (throw (st/data-error)))))
@@ -111,7 +55,7 @@
   ^XECPublicKey [name ^bytes b]
   (let [spec (XECPublicKeySpec.
               (NamedParameterSpec. name)
-              (BigInteger. 1 (reverse-bytes b)))]
+              (BigInteger. 1 (b/reverse b)))]
     (-> (KeyFactory/getInstance name)
         (.generatePublic spec))))
 
