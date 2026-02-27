@@ -13,8 +13,8 @@
   "Convert ec public key to bytes."
   ^bytes [len ^ECPublicKey pub]
   (let [^ECPoint w (.getW pub)
-        x (-> (.toByteArray (.getAffineX w)) (b/left-align len))
-        y (-> (.toByteArray (.getAffineY w)) (b/left-align len))]
+        x (-> (.toByteArray (.getAffineX w)) (b/right-align len))
+        y (-> (.toByteArray (.getAffineY w)) (b/right-align len))]
     (b/cat (byte-array [4]) x y)))
 
 (defn bytes->ec-pub
@@ -44,11 +44,9 @@
 (defn xec-pub->bytes
   "Convert xec public key to bytes."
   ^bytes [len ^XECPublicKey pub]
-  (let [be-bytes (.toByteArray (.getU pub))
-        le-bytes (-> be-bytes b/reverse (b/right-align len))]
-    (if (= len (count le-bytes))
-      le-bytes
-      (throw (st/data-error)))))
+  (-> (.toByteArray (.getU pub))
+      (b/right-align len)
+      b/reverse))
 
 (defn bytes->xec-pub
   "Convert bytes to xec public key."

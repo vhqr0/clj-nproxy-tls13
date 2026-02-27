@@ -6,6 +6,13 @@
 
 ;;; cryptor
 
+(defn mask-bytes-inplace
+  [^bytes b1 ^bytes b2]
+  (let [b1 (bytes b1)
+        b2 (bytes b2)]
+    (dotimes [idx (alength b1)]
+      (aset b1 idx (unchecked-byte (bit-xor (aget b1 idx) (aget b2 idx)))))))
+
 (def st-hkdf-label
   (st/keys
    :length st/st-ushort-be
@@ -45,7 +52,7 @@
   [cryptor]
   (let [{:keys [sequence iv]} cryptor]
     (doto (b/right-align (st/pack-long-be sequence) (b/length iv))
-      (b/mask-bytes-inplace iv))))
+      (mask-bytes-inplace iv))))
 
 (defn encrypt
   [cryptor plaintext aad]
