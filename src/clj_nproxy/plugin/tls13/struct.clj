@@ -246,7 +246,7 @@
    :legacy-version st-protocol-version ; tls12
    :random (st/->st-bytes 32)
    :legacy-session-id-echo (st/->st-var-bytes st/st-ubyte)
-   :cipher-suites st-cipher-suite-list
+   :cipher-suite st-cipher-suite
    :legacy-compression-method st-compression-method ; null
    :extensions st-extension-list))
 
@@ -508,6 +508,10 @@
   (st/keys
    :name-type st-name-type ; host-name
    :name st-host-name))
+
+(def st-server-name-host-list
+  (-> (st/->st-var-bytes st/st-ushort-be)
+      (st/wrap-many-struct st-server-name-host)))
 
 ;;; 7301.3.1 the alpn extension
 
