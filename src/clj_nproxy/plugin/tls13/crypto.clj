@@ -1,5 +1,6 @@
 (ns clj-nproxy.plugin.tls13.crypto
-  (:require [clj-nproxy.crypto :as crypto]
+  (:require [clj-nproxy.bytes :as b]
+            [clj-nproxy.crypto :as crypto]
             [clj-nproxy.plugin.tls13.crypto.ecformat :as ecformat]))
 
 ;;; cipher suites
@@ -90,3 +91,23 @@
    0x0019 secp521r1-group
    0x001d x25519-group
    0x001e x448-group})
+
+(defn sim-agreement
+  "Simulate key agreement."
+  [group]
+  (let [{:keys [gen-fn agreement-fn pub->bytes-fn bytes->pub-fn]} group
+        [pri1 pub1] (gen-fn)
+        [pri2 pub2] (gen-fn)]
+    (zero?
+     (b/compare
+      (agreement-fn pri1 (-> pub2 pub->bytes-fn bytes->pub-fn))
+      (agreement-fn pri2 (-> pub1 pub->bytes-fn bytes->pub-fn))))))
+
+^:rct/test
+(comment
+  (sim-agreement secp256r1-group) ; => true
+  (sim-agreement secp384r1-group) ; => true
+  (sim-agreement secp521r1-group) ; => true
+  (sim-agreement x25519-group) ; => true
+  (sim-agreement x448-group) ; => true
+  )
