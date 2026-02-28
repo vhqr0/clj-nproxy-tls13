@@ -23,20 +23,8 @@
 (def hello-retry-request-random
   (b/hex->bytes "CF21AD74E59A6111BE1D8C021E65B891C2A211167ABB8C5E079E09E2C8A8339C"))
 
-(def server-context-string
-  "TLS 1.3, server CertificateVerify")
-(def client-context-string
-  "TLS 1.3, client CertificateVerify")
-
-(def server-context-prefix
-  (b/cat (byte-array (repeat 64 20))
-         (b/str->bytes server-context-string)
-         (byte-array [0])))
-
-(def client-context-prefix
-  (b/cat (byte-array (repeat 64 20))
-         (b/str->bytes client-context-string)
-         (byte-array [0])))
+(def server-context-string "TLS 1.3, server CertificateVerify")
+(def client-context-string "TLS 1.3, client CertificateVerify")
 
 (def label-map
   {:derived               "tls13 derived"
@@ -55,6 +43,95 @@
    :key                   "tls13 key"
    :iv                    "tls13 iv"
    :finished              "tls13 finished"})
+
+;;; pre-declare
+
+(def signature-scheme-map
+  {:rsa-pkcs1-sha256       0x0401
+   :rsa-pkcs1-sha384       0x0501
+   :rsa-pkcs1-sha512       0x0601
+   :ecdsa-secp256r1-sha256 0x0403
+   :ecdsa-secp384r1-sha384 0x0503
+   :ecdsa-secp521r1-sha512 0x0603
+   :rsa-pss-rsae-sha256    0x0804
+   :rsa-pss-rsae-sha384    0x0805
+   :rsa-pss-rsae-sha512    0x0806
+   :ed25519                0x0807
+   :ed448                  0x0808
+   :rsa-pss-pss-sha256     0x0809
+   :rsa-pss-pss-sha384     0x080a
+   :rsa-pss-pss-sha512     0x080b
+   :rsa-pkcs1-sha1         0x0201
+   :ecdsa-sha1             0x0203})
+
+(def st-signature-scheme st/unpack-short-be)
+(def st-signature-scheme-list
+  (-> (st/->st-var-bytes st/st-ushort-be)
+      (st/wrap-many-struct st-signature-scheme)))
+
+(def cipher-suite-map
+  {:tls-aes-128-gcm-sha256       0x1301
+   :tls-aes-256-gcm-sha384       0x1302
+   :tls-chacha20-poly1305-sha256 0x1303
+   :tls-aes-128-ccm-sha256       0x1304
+   :tls-aes-128-ccm-8-sha256     0x1305})
+
+(def st-cipher-suite st/st-ushort-be)
+(def st-cipher-suite-list
+  (-> (st/->st-var-bytes st/st-ushort-be)
+      (st/wrap-many-struct st-cipher-suite)))
+
+(def named-group-map
+  {:secp256r1 0x0017
+   :secp384r1 0x0018
+   :secp521r1 0x0019
+   :x25519    0x001d
+   :x448      0x001e
+   :ffdhe2048 0x0100
+   :ffdhe3072 0x0101
+   :ffdhe4096 0x0102
+   :ffdhe6144 0x0103
+   :ffdhe8192 0x0104})
+
+(def st-named-group st/unpack-short-be)
+(def st-named-group-list
+  (-> (st/->st-var-bytes st/st-ushort-be)
+      (st/wrap-many-struct st-named-group)))
+
+(def extension-type-map
+  {:server-name                            0
+   :max-fragment-length                    1
+   :status-request                         5
+   :supported-groups                       10
+   :signature-algorithms                   13
+   :use-srtp                               14
+   :heartbeat                              15
+   :application-layer-protocol-negotiation 16
+   :signed-certificate-timestamp           18
+   :client-certificate-type                19
+   :server-certificate-type                20
+   :padding                                21
+   :pre-shared-key                         41
+   :early-data                             42
+   :supported-versions                     43
+   :cookie                                 44
+   :psk-key-exchange-modes                 45
+   :certificate-authorities                47
+   :oid-filters                            48
+   :post-handshake-auth                    49
+   :signature-algorithms-cert              50
+   :key-share                              51})
+
+(def st-extension-type st/st-ushort-be)
+
+(def st-extension
+  (st/keys
+   :extension-type st-extension-type
+   :extension-data (st/->st-var-bytes st/st-ushort-be)))
+
+(def st-extension-list
+  (-> (st/->st-var-bytes st/st-ushort-be)
+      (st/wrap-many-struct st-extension)))
 
 ;;; compatible
 
@@ -229,9 +306,6 @@
 
 ;;;; b.3.1 key exchange messages
 
-(declare st-extension-list)
-(declare st-cipher-suite-list)
-
 (def st-client-hello
   (st/keys
    :legacy-version st-protocol-version ; tls12
@@ -249,45 +323,6 @@
    :cipher-suite st-cipher-suite
    :legacy-compression-method st-compression-method ; null
    :extensions st-extension-list))
-
-(declare st-extension-type)
-
-(def st-extension
-  (st/keys
-   :extension-type st-extension-type
-   :extension-data (st/->st-var-bytes st/st-ushort-be)))
-
-(def st-extension-list
-  (-> (st/->st-var-bytes st/st-ushort-be)
-      (st/wrap-many-struct st-extension)))
-
-(def extension-type-map
-  {:server-name                            0
-   :max-fragment-length                    1
-   :status-request                         5
-   :supported-groups                       10
-   :signature-algorithms                   13
-   :use-srtp                               14
-   :heartbeat                              15
-   :application-layer-protocol-negotiation 16
-   :signed-certificate-timestamp           18
-   :client-certificate-type                19
-   :server-certificate-type                20
-   :padding                                21
-   :pre-shared-key                         41
-   :early-data                             42
-   :supported-versions                     43
-   :cookie                                 44
-   :psk-key-exchange-modes                 45
-   :certificate-authorities                47
-   :oid-filters                            48
-   :post-handshake-auth                    49
-   :signature-algorithms-cert              50
-   :key-share                              51})
-
-(def st-extension-type st/st-ushort-be)
-
-(declare st-named-group)
 
 (def st-key-share-entry
   (st/keys
@@ -358,50 +393,6 @@
 ;;;;; b.3.1.2 cookie extension
 
 (def st-cookie (st/->st-var-bytes st/st-ushort-be))
-
-;;;;; b.3.1.3 signature algorithm extension
-
-(def signature-scheme-map
-  {:rsa-pkcs1-sha256       0x0401
-   :rsa-pkcs1-sha384       0x0501
-   :rsa-pkcs1-sha512       0x0601
-   :ecdsa-secp256r1-sha256 0x0403
-   :ecdsa-secp384r1-sha384 0x0503
-   :ecdsa-secp521r1-sha512 0x0603
-   :rsa-pss-rsae-sha256    0x0804
-   :rsa-pss-rsae-sha384    0x0805
-   :rsa-pss-rsae-sha512    0x0806
-   :ed25519                0x0807
-   :ed448                  0x0808
-   :rsa-pss-pss-sha256     0x0809
-   :rsa-pss-pss-sha384     0x080a
-   :rsa-pss-pss-sha512     0x080b
-   :rsa-pkcs1-sha1         0x0201
-   :ecdsa-sha1             0x0203})
-
-(def st-signature-scheme st/unpack-short-be)
-(def st-signature-scheme-list
-  (-> (st/->st-var-bytes st/st-ushort-be)
-      (st/wrap-many-struct st-signature-scheme)))
-
-;;;;; b.3.1.4 supported groups extension
-
-(def named-group-map
-  {:secp256r1 0x0017
-   :secp384r1 0x0018
-   :secp521r1 0x0019
-   :x25519    0x001d
-   :x448      0x001e
-   :ffdhe2048 0x0100
-   :ffdhe3072 0x0101
-   :ffdhe4096 0x0102
-   :ffdhe6144 0x0103
-   :ffdhe8192 0x0104})
-
-(def st-named-group st/unpack-short-be)
-(def st-named-group-list
-  (-> (st/->st-var-bytes st/st-ushort-be)
-      (st/wrap-many-struct st-named-group)))
 
 ;;;; b.3.2 server parameters messages
 
@@ -480,20 +471,6 @@
 (def st-key-update-request st/st-ubyte)
 
 (def st-key-update st-key-update-request)
-
-;;; b.4 cipher suites
-
-(def cipher-suite-map
-  {:tls-aes-128-gcm-sha256       0x1301
-   :tls-aes-256-gcm-sha384       0x1302
-   :tls-chacha20-poly1305-sha256 0x1303
-   :tls-aes-128-ccm-sha256       0x1304
-   :tls-aes-128-ccm-8-sha256     0x1305})
-
-(def st-cipher-suite st/st-ushort-be)
-(def st-cipher-suite-list
-  (-> (st/->st-var-bytes st/st-ushort-be)
-      (st/wrap-many-struct st-cipher-suite)))
 
 ;;; 6066.3 server name indication
 
