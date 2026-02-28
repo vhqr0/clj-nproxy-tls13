@@ -107,7 +107,7 @@
   [named-group]
   (if-let [{:keys [gen-fn] :as group} (get tls13-crypto/named-group-map named-group)]
     (let [[pri pub] (gen-fn)]
-      (merge group {:group named-group :pri pri :pub pub}))
+      (merge group {:named-group named-group :pri pri :pub pub}))
     (throw (st/data-error))))
 
 (defn key-agreement
@@ -125,20 +125,17 @@
 
 (defn init-context
   "Construct init context."
-  [{:keys [versions
-           signature-algorithms
+  [{:keys [signature-algorithms
            cipher-suites
            named-groups
            server-names
            application-protocols]
-    :or {versions [0x0304]
-         signature-algorithms [0x0807 0x0808 0x0403 0x0503 0x0603]
+    :or {signature-algorithms [0x0807 0x0808 0x0403 0x0503 0x0603]
          cipher-suites [0x1301 0x1302 0x1303]
          named-groups [0x001d 0x001e]}}]
   (let [client-random (b/rand 32)
         key-shares (->> named-groups (mapv named-group->key-share))
         context {:stage :wait-sh
-                 :versions versions
                  :signature-algorithms signature-algorithms
                  :cipher-suites cipher-suites
                  :named-groups named-groups
@@ -148,7 +145,6 @@
                  :key-shares key-shares}]
     (send-client-hello context)))
 
-;; client hello, change cipher spec
 (defn send-plaintext
   "Send plaintext."
   [context type content]
@@ -164,18 +160,12 @@
         (update encryptor-key inc-sequence)
         (update :send-bytes (fnil conj []) record))))
 
-;; client finished
 (def send-handshake-ciphertext (partial send-ciphertext :handshake-encryptor))
-
-;; early data, end of early data
-(def send-early-ciphertext (partial send-ciphertext :early-encryptor))
-
-;; post handshake early data
 (def send-application-ciphertext (partial send-ciphertext :application-encryptor))
 
 (defn pack-supported-versions
-  [{:keys [versions]}]
-  (st/pack tls13-st/st-supported-version-client-hello versions))
+  []
+  (st/pack tls13-st/st-supported-version-client-hello [0x0304]))
 
 (defn pack-signature-algorithms
   [{:keys [signature-algorithms]}]
@@ -191,7 +181,7 @@
            (->> key-shares
                 (map
                  (fn [{:keys [group pub pub->bytes-fn]}]
-                   {:group group :key-exchange (pub->bytes-fn pub)})))))
+                   {:named-group group :key-exchange (pub->bytes-fn pub)})))))
 
 (defn pack-server-name
   [{:keys [server-names]}]
@@ -211,7 +201,7 @@
   "Second client hello."
   [context]
   (let [{:keys [client-random cipher-suites]} context
-        extensions [[43 (pack-supported-versions context)]
+        extensions [[43 (pack-supported-versions)]
                     [13 (pack-signature-algorithms context)]
                     [10 (pack-supported-groups context)]
                     [51 (pack-key-share context)]
@@ -247,29 +237,31 @@
   "Recv record, return new context."
   (fn [context _type _content] (:stage context)))
 
+(defn derive-handshake-secret
+  "Derive handshake secret from shared secret."
+  [cipher-suite shared-secret]
+  (let [{:keys [hkdf-extract-fn digest-size]} cipher-suite
+        early-secret (hkdf-extract-fn (byte-array digest-size) (byte-array digest-size))
+        salt (hkdf-derive-secret cipher-suite early-secret (:derived tls13-st/label-map) nil)]
+    (hkdf-extract-fn shared-secret salt)))
+
 (defmethod recv-record :wait-sh [context type content]
   (if (= type 22)
     (let [context (update context :handshake-msgs (fnil conj []) content)
           {:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
       (if (= msg-type 1)
-        (let [{:keys [cipher-suites named-groups application-protocols key-shares handshake-msgs]} context
+        (let [{:keys [cipher-suites application-protocols key-shares handshake-msgs]} context
               {:keys [extensions] server-random :random selected-cipher-suite :cipher-suite} (st/unpack tls13-st/st-server-hello msg-data)
               extension-map (into {} extensions)
               selected-version (some->> (get extension-map 43) (st/unpack tls13-st/st-supported-version-server-hello))
-              {selected-named-group :group :as selected-key-share} (some->> (get extension-map 51) (st/unpack tls13-st/st-key-share-server-hello))
-              selected-application-protocols (some->> (get extension-map 16) (st/unpack tls13-st/st-protocol-name-list))]
+              {selected-named-group :named-group :as selected-key-share} (some->> (get extension-map 51) (st/unpack tls13-st/st-key-share-server-hello))]
           (if (and (= selected-version 0x0304)
                    (contains? (set cipher-suites) selected-cipher-suite)
-                   (contains? (set named-groups) selected-named-group)
-                   (or (nil? selected-application-protocols)
-                       (and (= 1 (count selected-application-protocols))
-                            (contains? (set application-protocols) (first selected-application-protocols)))))
-            (let [{:keys [hkdf-extract-fn digest-size] :as cipher-suite} (get tls13-crypto/cipher-suite-map selected-cipher-suite)
-                  key-share (->> key-shares (filter #(= selected-named-group (:group %))) first)
+                   (contains? (set (map :named-group key-shares)) selected-named-group))
+            (let [cipher-suite (get tls13-crypto/cipher-suite-map selected-cipher-suite)
+                  key-share (->> key-shares (filter #(= selected-named-group (:named-group %))) first)
                   shared-secret (key-agreement key-share selected-key-share)
-                  ;; TODO support psk
-                  early-secret (hkdf-extract-fn (byte-array digest-size) (byte-array digest-size))
-                  handshake-secret (hkdf-extract-fn shared-secret (hkdf-derive-secret cipher-suite early-secret (:derived tls13-st/label-map) nil))
+                  handshake-secret (derive-handshake-secret cipher-suite shared-secret)
                   client-handshake-secret (hkdf-derive-secret cipher-suite handshake-secret (:client-handshake tls13-st/label-map) handshake-msgs)
                   server-handshake-secret (hkdf-derive-secret cipher-suite handshake-secret (:server-handshake tls13-st/label-map) handshake-msgs)
                   handshake-encryptor (reset-key cipher-suite client-handshake-secret)
@@ -283,10 +275,10 @@
                 :cipher-suite cipher-suite
                 :shared-secret shared-secret
                 :handshake-secret handshake-secret
+                :server-handshake-secret server-handshake-secret
+                :client-handshake-secret client-handshake-secret
                 :handshake-encryptor handshake-encryptor
-                :handshake-decryptor handshake-decryptor}
-               (when (some? selected-application-protocols)
-                 {:selected-application-protocol (first selected-application-protocols)})))
+                :handshake-decryptor handshake-decryptor}))
             (throw (st/data-error))))
         (throw (st/data-error))))
     (throw (st/data-error))))
@@ -302,3 +294,109 @@
     23 (-> context
            (assoc :stage :wait-ee)
            (recv-record type content))))
+
+(defmethod recv-record :wait-ee [context type content]
+  (if (= type 23)
+    (let [[context type content] (recv-handshake-ciphertext context content)]
+      (if (= type 22)
+        (let [context (update context :handshake-msgs (fnil conj []) content)
+              {:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
+          (if (= msg-type 8)
+            (let [{:keys [application-protocols]} context
+                  extensions (st/unpack tls13-st/st-encrypted-extension)
+                  extension-map (into {} extensions)
+                  selected-application-protocols (some->> (get extension-map 16) (st/unpack tls13-st/st-protocol-name-list))]
+              (if (or (nil? selected-application-protocols)
+                      (and (= 1 (count selected-application-protocols))
+                           (contains? (set application-protocols) (first selected-application-protocols))))
+                (merge
+                 context
+                 {:stage :wait-cert}
+                 (when (some? selected-application-protocols)
+                   {:selected-application-protocol (first selected-application-protocols)}))
+                (throw (st/data-error))))
+            (throw (st/data-error))))
+        (throw (st/data-error))))
+    (throw (st/data-error))))
+
+(defmethod recv-record :wait-cert [context type content]
+  (if (= type 23)
+    (let [[context type content] (recv-handshake-ciphertext context content)]
+      (if (= type 22)
+        (let [context (update context :handshake-msgs (fnil conj []) content)
+              {:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
+          (if (= msg-type 11)
+            (let [{:keys [certificate-request-context certificate-list]} (st/unpack tls13-st/st-certificate content)]
+              (merge
+               context
+               {:stage :wait-cv
+                :server-certificate-request-context certificate-request-context
+                :server-certificate-list certificate-list}))
+            (throw (st/data-error))))
+        (throw (st/data-error))))
+    (throw (st/data-error))))
+
+(defn server-signature-data
+  [cipher-suite handshake-msgs]
+  (let [{:keys [digest-fn]} cipher-suite]
+    (b/cat
+     (doto (byte-array 64) (b/fill 0x20))
+     (b/str->bytes tls13-st/server-context-string)
+     (byte-array [0])
+     (apply digest-fn (butlast handshake-msgs)))))
+
+(defmethod recv-record :wait-cv [context type content]
+  (if (= type 23)
+    (let [[context type content] (recv-handshake-ciphertext context content)]
+      (if (= type 22)
+        (let [context (update context :handshake-msgs (fnil conj []) content)
+              {:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
+          (if (= msg-type 15)
+            (let [{:keys [cipher-suite handshake-msgs]} context
+                  {:keys [algorithm signature]} (st/unpack tls13-st/st-certificate-verify content)]
+              (merge
+               context
+               {:stage :wait-finished
+                :server-signature-algorithm algorithm
+                :server-signature signature
+                :server-signature-data (server-signature-data cipher-suite (butlast handshake-msgs))}))
+            (throw (st/data-error))))
+        (throw (st/data-error))))
+    (throw (st/data-error))))
+
+(defmethod recv-record :wait-finished [context type content]
+  (if (= type 23)
+    (let [[context type content] (recv-handshake-ciphertext context content)]
+      (if (= type 22)
+        (let [context (update context :handshake-msgs (fnil conj []) content)
+              {:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
+          (if (= msg-type 20)
+            (let [{:keys [cipher-suite handshake-secret server-handshake-secret client-handshake-secret handshake-msgs send-change-cipher-spec?]} context
+                  {:keys [digest-fn hmac-fn hkdf-extract-fn digest-size]} cipher-suite
+                  server-verify-key (hkdf-expand-label cipher-suite server-handshake-secret (:finished tls13-st/label-map) (byte-array 0) digest-size)
+                  client-verify-key (hkdf-expand-label cipher-suite client-handshake-secret (:finished tls13-st/label-map) (byte-array 0) digest-size)
+                  server-verify-data (hmac-fn server-verify-key (apply digest-fn (butlast handshake-msgs)))
+                  client-verify-data (hmac-fn client-verify-key (apply digest-fn handshake-msgs))]
+              (if (zero? (b/compare server-verify-data msg-data))
+                (let [master-secret (hkdf-extract-fn cipher-suite (byte-array digest-size) (hkdf-derive-secret cipher-suite handshake-secret (:derived tls13-st/label-map) nil))
+                      client-application-secret (hkdf-derive-secret cipher-suite master-secret (:client-application tls13-st/label-map) handshake-msgs)
+                      server-application-secret (hkdf-derive-secret cipher-suite master-secret (:server-application tls13-st/label-map) handshake-msgs)
+                      application-encryptor (reset-key cipher-suite client-application-secret)
+                      application-decryptor (reset-key cipher-suite server-application-secret)
+                      context (merge
+                               context
+                               {:stage :connected
+                                :master-secret master-secret
+                                :application-encryptor application-encryptor
+                                :application-decryptor application-decryptor})
+                      context (cond-> context
+                                send-change-cipher-spec?
+                                (send-plaintext 20 (st/pack tls13-st/st-change-cipher-spec 1)))
+                      handshake (st/pack tls13-st/st-handshake {:msg-type 20 :msg-data client-verify-data})]
+                  (-> context
+                      (update :handshake-msgs (fnil conj []) handshake)
+                      (send-handshake-ciphertext 22 handshake)))
+                (throw (st/data-error))))
+            (throw (st/data-error))))
+        (throw (st/data-error))))
+    (throw (st/data-error))))
