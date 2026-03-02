@@ -9,7 +9,7 @@
 (def st-uint24
   (-> (st/->st-bytes 3)
       (st/wrap
-       #(st/unpack st/st-uint-be (b/cat (byte-array [0]) %))
+       #(st/unpack st/st-uint-be (b/right-align % 4))
        #(b/copy-of-range (st/pack st/st-uint-be %) 1 4))))
 
 ^:rct/test
@@ -18,109 +18,226 @@
   (st/unpack st-uint24 (byte-array [0 0 1])) ; => 1
   )
 
-;;; consts
+;;; const
 
-(def hello-retry-request-random
-  (b/hex->bytes "CF21AD74E59A6111BE1D8C021E65B891C2A211167ABB8C5E079E09E2C8A8339C"))
+;;;; label
 
-(def server-context-string "TLS 1.3, server CertificateVerify")
-(def client-context-string "TLS 1.3, client CertificateVerify")
+(def label-derived               "tls13 derived")
+(def label-external-binder       "tls13 ext binder")
+(def label-resumption-binder     "tls13 res binder")
+(def label-resumption-master     "tls13 res master")
+(def label-resumption            "tls13 resumption")
+(def label-exporter-master       "tls13 exp master")
+(def label-early-exporter-master "tls13 e exp master")
+(def label-client-early          "tls13 c e traffic")
+(def label-client-handshake      "tls13 c hs traffic")
+(def label-server-handshake      "tls13 s hs traffic")
+(def label-client-application    "tls13 c ap traffic")
+(def label-server-application    "tls13 s ap traffic")
+(def label-key-update            "tls13 traffic upd")
+(def label-key                   "tls13 key")
+(def label-iv                    "tls13 iv")
+(def label-finished              "tls13 finished")
 
-(def label-map
-  {:derived               "tls13 derived"
-   :external-binder       "tls13 ext binder"
-   :resumption-binder     "tls13 res binder"
-   :resumption-master     "tls13 res master"
-   :resumption            "tls13 resumption"
-   :exporter-master       "tls13 exp master"
-   :early-exporter-master "tls13 e exp master"
-   :client-early          "tls13 c e traffic"
-   :client-handshake      "tls13 c hs traffic"
-   :server-handshake      "tls13 s hs traffic"
-   :client-application    "tls13 c ap traffic"
-   :server-application    "tls13 s ap traffic"
-   :key-update            "tls13 traffic upd"
-   :key                   "tls13 key"
-   :iv                    "tls13 iv"
-   :finished              "tls13 finished"})
+;;;; version
 
-;;; pre-declare
+(def version-ssl30 0x0300)
+(def version-tls10 0x0301)
+(def version-tls11 0x0302)
+(def version-tls12 0x0303)
+(def version-tls13 0x0304)
 
-(def signature-scheme-map
-  {:rsa-pkcs1-sha256       0x0401
-   :rsa-pkcs1-sha384       0x0501
-   :rsa-pkcs1-sha512       0x0601
-   :ecdsa-secp256r1-sha256 0x0403
-   :ecdsa-secp384r1-sha384 0x0503
-   :ecdsa-secp521r1-sha512 0x0603
-   :rsa-pss-rsae-sha256    0x0804
-   :rsa-pss-rsae-sha384    0x0805
-   :rsa-pss-rsae-sha512    0x0806
-   :ed25519                0x0807
-   :ed448                  0x0808
-   :rsa-pss-pss-sha256     0x0809
-   :rsa-pss-pss-sha384     0x080a
-   :rsa-pss-pss-sha512     0x080b
-   :rsa-pkcs1-sha1         0x0201
-   :ecdsa-sha1             0x0203})
+(def st-protocol-version st/st-ushort-be)
+(def st-protocol-version-list
+  (-> (st/->st-var-bytes st/st-ubyte)
+      (st/wrap-many-struct st-protocol-version)))
+
+;;;; compression
+
+(def compression-method-null 0)
+
+(def st-compression-method st/st-ubyte)
+(def st-compression-method-list
+  (-> (st/->st-var-bytes st/st-ubyte)
+      (st/wrap-many-struct st-compression-method)))
+
+;;;; signature scheme
+
+(def signature-scheme-rsa-pkcs1-sha256       0x0401)
+(def signature-scheme-rsa-pkcs1-sha384       0x0501)
+(def signature-scheme-rsa-pkcs1-sha512       0x0601)
+(def signature-scheme-ecdsa-secp256r1-sha256 0x0403)
+(def signature-scheme-ecdsa-secp384r1-sha384 0x0503)
+(def signature-scheme-ecdsa-secp521r1-sha512 0x0603)
+(def signature-scheme-rsa-pss-rsae-sha256    0x0804)
+(def signature-scheme-rsa-pss-rsae-sha384    0x0805)
+(def signature-scheme-rsa-pss-rsae-sha512    0x0806)
+(def signature-scheme-ed25519                0x0807)
+(def signature-scheme-ed448                  0x0808)
+(def signature-scheme-rsa-pss-pss-sha256     0x0809)
+(def signature-scheme-rsa-pss-pss-sha384     0x080a)
+(def signature-scheme-rsa-pss-pss-sha512     0x080b)
+(def signature-scheme-rsa-pkcs1-sha1         0x0201)
+(def signature-scheme-ecdsa-sha1             0x0203)
 
 (def st-signature-scheme st/unpack-short-be)
 (def st-signature-scheme-list
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-signature-scheme)))
 
-(def cipher-suite-map
-  {:tls-aes-128-gcm-sha256       0x1301
-   :tls-aes-256-gcm-sha384       0x1302
-   :tls-chacha20-poly1305-sha256 0x1303
-   :tls-aes-128-ccm-sha256       0x1304
-   :tls-aes-128-ccm-8-sha256     0x1305})
+;;;; cipher suite
+
+(def cipher-suite-tls-aes-128-gcm-sha256       0x1301)
+(def cipher-suite-tls-aes-256-gcm-sha384       0x1302)
+(def cipher-suite-tls-chacha20-poly1305-sha256 0x1303)
+(def cipher-suite-tls-aes-128-ccm-sha256       0x1304)
+(def cipher-suite-tls-aes-128-ccm-8-sha256     0x1305)
 
 (def st-cipher-suite st/st-ushort-be)
 (def st-cipher-suite-list
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-cipher-suite)))
 
-(def named-group-map
-  {:secp256r1 0x0017
-   :secp384r1 0x0018
-   :secp521r1 0x0019
-   :x25519    0x001d
-   :x448      0x001e
-   :ffdhe2048 0x0100
-   :ffdhe3072 0x0101
-   :ffdhe4096 0x0102
-   :ffdhe6144 0x0103
-   :ffdhe8192 0x0104})
+;;;; named group
+
+(def named-group-secp256r1 0x0017)
+(def named-group-secp384r1 0x0018)
+(def named-group-secp521r1 0x0019)
+(def named-group-x25519    0x001d)
+(def named-group-x448      0x001e)
+(def named-group-ffdhe2048 0x0100)
+(def named-group-ffdhe3072 0x0101)
+(def named-group-ffdhe4096 0x0102)
+(def named-group-ffdhe6144 0x0103)
+(def named-group-ffdhe8192 0x0104)
 
 (def st-named-group st/unpack-short-be)
 (def st-named-group-list
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-named-group)))
 
-(def extension-type-map
-  {:server-name                            0
-   :max-fragment-length                    1
-   :status-request                         5
-   :supported-groups                       10
-   :signature-algorithms                   13
-   :use-srtp                               14
-   :heartbeat                              15
-   :application-layer-protocol-negotiation 16
-   :signed-certificate-timestamp           18
-   :client-certificate-type                19
-   :server-certificate-type                20
-   :padding                                21
-   :pre-shared-key                         41
-   :early-data                             42
-   :supported-versions                     43
-   :cookie                                 44
-   :psk-key-exchange-modes                 45
-   :certificate-authorities                47
-   :oid-filters                            48
-   :post-handshake-auth                    49
-   :signature-algorithms-cert              50
-   :key-share                              51})
+;;; record
+
+(def content-type-change-cipher-spec 20)
+(def content-type-alert              21)
+(def content-type-handshake          22)
+(def content-type-application-data   23)
+
+(def st-content-type st/st-ubyte)
+
+(def st-record-header
+  (st/keys
+   :type st-content-type
+   :version st-protocol-version
+   :length st/st-ushort-be))
+
+(def st-record
+  (st/keys
+   :type st-content-type
+   :version st-protocol-version
+   :content (st/->st-var-bytes st/st-ushort-be)))
+
+(defn unpack-inner-plaintext
+  "Unpack inner plaintext."
+  [^bytes b]
+  (let [b (bytes b)
+        l (alength b)
+        i (loop [i (dec l)]
+            (if (zero? i)
+              (throw (ex-info "invalid plaintext" {:reason ::invalid-plaintext}))
+              (if-not (zero? (aget b i))
+                i
+                (recur (dec i)))))
+        type (aget b i)
+        content (b/copy-of b i)]
+    [type content (dec (- l i))]))
+
+(defn pack-inner-plaintext
+  "Pack inner plaintext."
+  ([type content]
+   (b/cat content (byte-array [type])))
+  ([type content plen]
+   (b/cat content (byte-array [type]) (byte-array plen))))
+
+^:rct/test
+(comment
+  (-> (unpack-inner-plaintext (byte-array [1 2 3 4 0 0])) (update 1 seq)) ; => [4 [1 2 3] 2]
+  (seq (pack-inner-plaintext 1 (byte-array [2 3 4]))) ; => [2 3 4 1]
+  (seq (pack-inner-plaintext 1 (byte-array [2 3 4]) 2)) ; => [2 3 4 1 0 0]
+  )
+
+;;;; change cipher spec
+
+(def change-ciper-spec 1)
+
+(def st-change-cipher-spec st/st-ubyte)
+
+;;;; alert
+
+(def alert-level-warning 1)
+(def alert-level-fatal   2)
+
+(def st-alert-level st/st-ubyte)
+
+(def alert-description-close-notify                    0)
+(def alert-description-unexpected-message              10)
+(def alert-description-bad-record-mac                  20)
+(def alert-description-record-overflow                 22)
+(def alert-description-handshake-failure               40)
+(def alert-description-bad-certificate                 42)
+(def alert-description-unsupported-certificate         43)
+(def alert-description-certificate-revoked             44)
+(def alert-description-certificate-expired             45)
+(def alert-description-certificate-unknown             46)
+(def alert-description-illegal-parameter               47)
+(def alert-description-unknown-ca                      48)
+(def alert-description-access-denied                   49)
+(def alert-description-decode-error                    50)
+(def alert-description-decrypt-error                   51)
+(def alert-description-protocol-version                70)
+(def alert-description-insufficient-security           71)
+(def alert-description-internal-error                  80)
+(def alert-description-inappropriate-fallback          86)
+(def alert-description-user-canceled                   90)
+(def alert-description-missing-extension               109)
+(def alert-description-unsupported-extension           110)
+(def alert-description-unrecognized-name               112)
+(def alert-description-bad-certificate-status-response 113)
+(def alert-description-unknown-psk-identity            115)
+(def alert-description-certificate-required            116)
+(def alert-description-no-application-protocol         120)
+
+(def st-alert-description st/st-ubyte)
+
+(def st-alert
+  (st/keys :level st-alert-level :description st-alert-description))
+
+;;; handshake
+
+;;;; extension
+
+(def extension-type-server-name                            0)
+(def extension-type-max-fragment-length                    1)
+(def extension-type-status-request                         5)
+(def extension-type-supported-groups                       10)
+(def extension-type-signature-algorithms                   13)
+(def extension-type-use-srtp                               14)
+(def extension-type-heartbeat                              15)
+(def extension-type-application-layer-protocol-negotiation 16)
+(def extension-type-signed-certificate-timestamp           18)
+(def extension-type-client-certificate-type                19)
+(def extension-type-server-certificate-type                20)
+(def extension-type-padding                                21)
+(def extension-type-pre-shared-key                         41)
+(def extension-type-early-data                             42)
+(def extension-type-supported-versions                     43)
+(def extension-type-cookie                                 44)
+(def extension-type-psk-key-exchange-modes                 45)
+(def extension-type-certificate-authorities                47)
+(def extension-type-oid-filters                            48)
+(def extension-type-post-handshake-auth                    49)
+(def extension-type-signature-algorithms-cert              50)
+(def extension-type-key-share                              51)
 
 (def st-extension-type st/st-ushort-be)
 
@@ -133,169 +250,19 @@
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-extension)))
 
-;;; compatible
+;;;; handshake
 
-(def protocol-version-map
-  {:ssl30 0x0300
-   :tls10 0x0301
-   :tls11 0x0302
-   :tls12 0x0303
-   :tls13 0x0304})
-
-(def st-protocol-version st/st-ushort-be)
-(def st-protocol-version-list
-  (-> (st/->st-var-bytes st/st-ubyte)
-      (st/wrap-many-struct st-protocol-version)))
-
-(def change-cipher-spec-map
-  {:change-ciper-spec 1})
-
-(def st-change-cipher-spec st/st-ubyte)
-
-(def compression-method-map
-  {:null 0})
-
-(def st-compression-method st/st-ubyte)
-(def st-compression-method-list
-  (-> (st/->st-var-bytes st/st-ubyte)
-      (st/wrap-many-struct st-compression-method)))
-
-;;; b.1 record layer
-
-(def content-type-map
-  {:invalid            0
-   :change-cipher-spec 20
-   :alert              21
-   :handshake          22
-   :application-data   23
-   :heartbeat          24})
-
-(def st-content-type st/st-ubyte)
-
-(def st-plaintext
-  (st/keys :type st-content-type
-           :legacy-record-version st-protocol-version
-           :fragment (st/->st-var-bytes st/st-ushort-be)))
-
-(def st-ciphertext
-  (st/keys :opaque-type st-content-type ; application-data
-           :legacy-record-version st-protocol-version ; tls12
-           :encrypted-record (st/->st-var-bytes st/st-ushort-be)))
-
-(def st-record-header
-  (st/keys :type st-content-type
-           :version st-protocol-version
-           :length st/st-ushort-be))
-
-(def st-record
-  (st/keys :type st-content-type
-           :version st-protocol-version
-           :content (st/->st-var-bytes st/st-ushort-be)))
-
-(defn unpack-inner-plaintext
-  "Unpack inner plaintext."
-  [^bytes b]
-  (let [b (bytes b)
-        l (alength b)
-        i (loop [i (dec l)]
-            (if (zero? i)
-              (throw st/data-error)
-              (if-not (zero? (aget b i))
-                i
-                (recur (dec i)))))
-        type (aget b i)
-        content (b/copy-of b i)]
-    [type content (dec (- l i))]))
-
-^:rct/test
-(comment
-  (-> (unpack-inner-plaintext (byte-array [1 2 3 4 0 0])) (update 1 seq)) ; => [4 [1 2 3] 2]
-  )
-
-(defn pack-inner-plaintext
-  "Pack inner plaintext."
-  ([type content]
-   (b/cat content (byte-array [type])))
-  ([type content plen]
-   (b/cat content (byte-array [type]) (byte-array plen))))
-
-^:rct/test
-(comment
-  (seq (pack-inner-plaintext 1 (byte-array [2 3 4]))) ; => [2 3 4 1]
-  (seq (pack-inner-plaintext 1 (byte-array [2 3 4]) 2)) ; => [2 3 4 1 0 0]
-  )
-
-;;; b.2 alert messages
-
-(def alert-level-map
-  {:warning 1 :fatal 2})
-
-(def st-alert-level st/st-ubyte)
-
-(def alert-description-map
-  {:close-notify                        0
-   :unexpected-message                  10
-   :bad-record-mac                      20
-   :decryption-failed-RESERVED          21
-   :record-overflow                     22
-   :decompression-failure-RESERVED      30
-   :handshake-failure                   40
-   :no-certificate-RESERVED             41
-   :bad-certificate                     42
-   :unsupported-certificate             43
-   :certificate-revoked                 44
-   :certificate-expired                 45
-   :certificate-unknown                 46
-   :illegal-parameter                   47
-   :unknown-ca                          48
-   :access-denied                       49
-   :decode-error                        50
-   :decrypt-error                       51
-   :export-restriction-RESERVED         60
-   :protocol-version                    70
-   :insufficient-security               71
-   :internal-error                      80
-   :inappropriate-fallback              86
-   :user-canceled                       90
-   :no-renegotiation-RESERVED           100
-   :missing-extension                   109
-   :unsupported-extension               110
-   :certificate-unobtainable-RESERVED   111
-   :unrecognized-name                   112
-   :bad-certificate-status-response     113
-   :bad-certificate-hash-value-RESERVED 114
-   :unknown-psk-identity                115
-   :certificate-required                116
-   :no-application-protocol             120})
-
-(def st-alert-description st/st-ubyte)
-
-(def st-alert
-  (st/keys :level st-alert-level :description st-alert-description))
-
-;;; b.3 handshake protocol
-
-(def handshake-type-map
-  {:hello-request-RESERVED        0
-   :client-hello                  1
-   :server-hello                  2
-   :hello-verify-request-RESERVED 3
-   :new-session-ticket            4
-   :end-of-early-data             5
-   :hello-retry-request-RESERVED  6
-   :encrypted-extensions          8
-   :certificate                   11
-   :server-key-exchange-RESERVED  12
-   :certificate-request           13
-   :server-hello-done-RESERVED    14
-   :certificate-verify            15
-   :client-key-exchange-RESERVED  16
-   :finished                      20
-   :certificate-url-RESERVED      21
-   :certificate-status-RESERVED   22
-   :supplemental-data-RESERVED    23
-   :key-update                    24
-   :message-hash                  254})
+(def handshake-type-client-hello         1)
+(def handshake-type-server-hello         2)
+(def handshake-type-new-session-ticket   4)
+(def handshake-type-end-of-early-data    5)
+(def handshake-type-encrypted-extensions 8)
+(def handshake-type-certificate          11)
+(def handshake-type-certificate-request  13)
+(def handshake-type-certificate-verify   15)
+(def handshake-type-finished             20)
+(def handshake-type-key-update           24)
+(def handshake-type-message-hash         254)
 
 (def st-handshake-type st/st-ubyte)
 
@@ -304,25 +271,123 @@
    :msg-type st-handshake-type
    :msg-data (st/->st-var-bytes st-uint24)))
 
-;;;; b.3.1 key exchange messages
-
-(def st-client-hello
+(def st-handshake-client-hello
   (st/keys
-   :legacy-version st-protocol-version ; tls12
+   :legacy-version st-protocol-version
    :random (st/->st-bytes 32)
    :legacy-session-id (st/->st-var-bytes st/st-ubyte)
    :cipher-suites st-cipher-suite-list
    :legacy-compression-methods st-compression-method-list
    :extensions st-extension-list))
 
-(def st-server-hello
+(def st-handshake-server-hello
   (st/keys
-   :legacy-version st-protocol-version ; tls12
+   :legacy-version st-protocol-version
    :random (st/->st-bytes 32)
    :legacy-session-id-echo (st/->st-var-bytes st/st-ubyte)
    :cipher-suite st-cipher-suite
-   :legacy-compression-method st-compression-method ; null
+   :legacy-compression-method st-compression-method
    :extensions st-extension-list))
+
+(def hello-retry-request-random
+  "CF21AD74E59A6111BE1D8C021E65B891C2A211167ABB8C5E079E09E2C8A8339C")
+
+(def tls12-random "444F574E47524401")
+(def tls11-random "444F574E47524400")
+
+(def st-handshake-encrypted-extension st-extension-list)
+
+(def server-context-string "TLS 1.3, server CertificateVerify")
+(def client-context-string "TLS 1.3, client CertificateVerify")
+
+(def certificate-type-x509           0)
+(def certificate-type-raw-public-key 2)
+
+(def st-certificate-type st/st-ubyte)
+
+(def st-certificate-entry
+  (st/keys
+   :cert-data (st/->st-var-bytes st-uint24)
+   :extensions st-extension-list))
+
+(def st-certificate-entry-list
+  (-> (st/->st-var-bytes st-uint24)
+      (st/wrap-many-struct st-certificate-entry)))
+
+(def st-handshake-certificate
+  (st/keys
+   :certificate-request-context (st/->st-var-bytes st/st-ubyte)
+   :certificate-list st-certificate-entry-list))
+
+(def st-handshake-certificate-verify
+  (st/keys
+   :algorithm st-signature-scheme
+   :signature (st/->st-var-bytes st/st-ushort-be)))
+
+(def st-handshake-certificate-request
+  (st/keys
+   :certificate-request-context (st/->st-var-bytes st/st-ubyte)
+   :extensions st-extension-list))
+
+(def st-handshake-end-of-early-data st/st-null)
+
+(def st-handshake-new-session-ticket
+  (st/keys
+   :ticket-lifetime st/st-uint-be
+   :ticket-age-add st/st-uint-be
+   :ticket-nonce (st/->st-var-bytes st/st-ubyte)
+   :ticket (st/->st-var-bytes st/st-ushort-be)
+   :extensions st-extension-list))
+
+(def key-update-not-requested 0)
+(def key-update-requested     1)
+
+(def st-handshake-key-update st/st-ubyte)
+
+;;;; supported versions
+
+(def st-extension-supported-versions-client-hello st-protocol-version-list)
+(def st-extension-supported-versions-server-hello st-protocol-version)
+
+;;;; cookie
+
+(def st-extension-cookie (st/->st-var-bytes st/st-ushort-be))
+
+;;;; signature algorithms
+
+(def st-extension-signature-algorithms st-signature-scheme-list)
+
+;;;; certificate authorities
+
+(def st-distinguished-name (st/->st-var-bytes st/st-ushort-be))
+(def st-distinguished-name-list
+  (-> (st/->st-var-bytes st/st-ushort-be)
+      (st/wrap-many-struct st-distinguished-name)))
+
+(def st-extension-certificate-authorities st-distinguished-name-list)
+
+;;;; oid filters
+
+(def st-oid-filter
+  (st/keys
+   :certificate-extension-oid (st/->st-var-bytes st/st-ubyte)
+   :certificate-extension-values (st/->st-var-bytes st/st-ushort-be)))
+
+(def st-oid-filter-list
+  (-> (st/->st-var-bytes st/unpack-short-be)
+      (st/wrap-many-struct st-oid-filter)))
+
+(def st-extension-oid-filters st-oid-filter-list)
+
+;;;; post handshake auth
+
+(def st-extension-post-handshake-auth st/st-null)
+
+;;;; supported groups
+
+(def st-extension-supported-groups st-named-group-list)
+
+;;;; key share
 
 (def st-key-share-entry
   (st/keys
@@ -333,35 +398,29 @@
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-key-share-entry)))
 
-(def st-key-share-client-hello st-key-share-entry-list)
-(def st-key-share-hello-retry-request st-named-group)
-(def st-key-share-server-hello st-key-share-entry)
+(def st-extension-key-share-client-hello st-key-share-entry-list)
+(def st-extension-key-share-hello-retry-request st-named-group)
+(def st-extension-key-share-server-hello st-key-share-entry)
 
-(def st-uncompressed-point-representation-p256
-  (st/keys :legacy-form st/st-ubyte ; 4
-           :points (st/coll-of 2 (st/->st-bytes 32))))
+;;;; psk key exchange modes
 
-(def st-uncompressed-point-representation-p384
-  (st/keys :legacy-form st/st-ubyte ; 4
-           :points (st/coll-of 2 (st/->st-bytes 48))))
-
-(def st-uncompressed-point-representation-p512
-  (st/keys :legacy-form st/st-ubyte ; 4
-           :points (st/coll-of 2 (st/->st-bytes 66))))
-
-(def psk-key-exchange-mode-map
-  {:psk-ke 0 :psk-dhe-ke 1})
+(def psk-key-exchange-mode-ke     0)
+(def psk-key-exchange-mode-dhe-ke 1)
 
 (def st-psk-key-exchange-mode st/st-ubyte)
 (def st-psk-key-exchange-mode-list
   (-> (st/->st-var-bytes st/st-ubyte)
       (st/wrap-many-struct st-psk-key-exchange-mode)))
 
-(def st-psk-key-exchange-modes st-psk-key-exchange-mode-list)
+(def st-extension-psk-key-exchange-modes st-psk-key-exchange-mode-list)
 
-(def st-early-data-indication-new-session-ticket st/st-uint-be)
-(def st-early-data-indication-client-hello st/st-null)
-(def st-early-data-indication-encrypted-extensions st/st-null)
+;;;; early data
+
+(def st-extension-early-data-new-session-ticket st/st-uint-be)
+(def st-extension-early-data-client-hello st/st-null)
+(def st-extension-early-data-encrypted-extensions st/st-null)
+
+;;;; pre shared key
 
 (def st-psk-identity
   (st/keys
@@ -382,117 +441,30 @@
    :identities st-psk-identity-list
    :binders st-psk-binder-entry-list))
 
-(def st-pre-shared-key-extension-client-hello st-offered-psks)
-(def st-pre-shared-key-extension-server-hello st/st-ushort-be)
+(def st-extension-pre-shared-key-client-hello st-offered-psks)
+(def st-extension-pre-shared-key-server-hello st/st-ushort-be)
 
-;;;;; b.3.1.1 version extension
-
-(def st-supported-version-client-hello st-protocol-version-list)
-(def st-supported-version-server-hello st-protocol-version)
-
-;;;;; b.3.1.2 cookie extension
-
-(def st-cookie (st/->st-var-bytes st/st-ushort-be))
-
-;;;; b.3.2 server parameters messages
-
-(def st-distinguished-name (st/->st-var-bytes st/st-ushort-be))
-(def st-distinguished-name-list
-  (-> (st/->st-var-bytes st/st-ushort-be)
-      (st/wrap-many-struct st-distinguished-name)))
-
-(def st-certificate-authorities-extension st-distinguished-name-list)
-
-(def st-oid-filter
-  (st/keys
-   :certificate-extension-oid (st/->st-var-bytes st/st-ubyte)
-   :certificate-extension-values (st/->st-var-bytes st/st-ushort-be)))
-
-(def st-oid-filter-list
-  (-> (st/->st-var-bytes st/unpack-short-be)
-      (st/wrap-many-struct st-oid-filter)))
-
-(def st-oid-filter-extension st-oid-filter-list)
-
-(def st-post-handshake-auth st/st-null)
-
-(def st-encrypted-extension st-extension-list)
-
-(def st-certificate-request
-  (st/keys
-   :certificate-request-context (st/->st-var-bytes st/st-ubyte)
-   :extensions st-extension-list))
-
-;;;; b.3.3 authentication messages
-
-(def certificate-type-map
-  {:x509              0
-   :open-pgp-RESERVED 1
-   :raw-public-key    2})
-
-(def st-certificate-type st/st-ubyte)
-
-(def st-certificate-entry
-  (st/keys
-   :cert-data (st/->st-var-bytes st-uint24)
-   :extensions st-extension-list))
-
-(def st-certificate-entry-list
-  (-> (st/->st-var-bytes st-uint24)
-      (st/wrap-many-struct st-certificate-entry)))
-
-(def st-certificate
-  (st/keys
-   :certificate-request-context (st/->st-var-bytes st/st-ubyte)
-   :certificate-list st-certificate-entry-list))
-
-(def st-certificate-verify
-  (st/keys
-   :algorithm st-signature-scheme
-   :signature (st/->st-var-bytes st/st-ushort-be)))
-
-;;;; b.3.4 ticket establishment
-
-(def st-new-session-ticket
-  (st/keys
-   :ticket-lifetime st/st-uint-be
-   :ticket-age-add st/st-uint-be
-   :ticket-nonce (st/->st-var-bytes st/st-ubyte)
-   :ticket (st/->st-var-bytes st/st-ushort-be)
-   :extensions st-extension-list))
-
-;;;; b.3.5 updating keys
-
-(def st-end-of-early-data st/st-null)
-
-(def key-update-request-map
-  {:update-not-request 0 :update-requested 1})
-
-(def st-key-update-request st/st-ubyte)
-
-(def st-key-update st-key-update-request)
-
-;;; 6066.3 server name indication
-
-(def name-type-map
-  {:host-name 0})
-
-(def st-name-type st/st-ubyte)
+;;;; server name
 
 (def st-host-name (-> (st/->st-var-bytes st/st-ushort-be) st/wrap-str))
 
 (def st-server-name-host
   (st/keys
-   :name-type st-name-type ; host-name
+   :name-type st/st-ubyte ; 0
    :name st-host-name))
 
 (def st-server-name-host-list
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-server-name-host)))
 
-;;; 7301.3.1 the alpn extension
+(def st-extension-server-name-client-hello st-server-name-host-list)
+(def st-extension-server-name-server-hello st/st-null)
+
+;;;; alpn
 
 (def st-protocol-name (-> (st/->st-var-bytes st/st-ubyte) st/wrap-str))
 (def st-protocol-name-list
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-protocol-name)))
+
+(def st-extension-application-layer-protocol-negotiation st-protocol-name-list)

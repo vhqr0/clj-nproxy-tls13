@@ -30,7 +30,7 @@
           spec (ECPublicKeySpec. w params)]
       (-> (KeyFactory/getInstance "EC")
           (.generatePublic spec)))
-    (throw (st/data-error))))
+    (throw (ex-info "invalid length" {:reason ::invalid-length}))))
 
 (def secp256r1-pub->bytes (partial ec-pub->bytes 32))
 (def secp384r1-pub->bytes (partial ec-pub->bytes 48))

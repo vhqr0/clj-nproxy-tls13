@@ -1,6 +1,7 @@
 (ns clj-nproxy.plugin.tls13.crypto
   (:require [clj-nproxy.bytes :as b]
             [clj-nproxy.crypto :as crypto]
+            [clj-nproxy.plugin.tls13.struct :as tls13-st]
             [clj-nproxy.plugin.tls13.crypto.ecformat :as ecformat]))
 
 ;;; cipher suites
@@ -49,9 +50,9 @@
     :aead-tag-size   16}))
 
 (def cipher-suite-map
-  {0x1301 aes-128-gcm-sha256-suite
-   0x1302 aes-256-gcm-sha384-suite
-   0x1303 chacha20-poly1305-sha256-suite})
+  {tls13-st/cipher-suite-tls-aes-128-gcm-sha256       aes-128-gcm-sha256-suite
+   tls13-st/cipher-suite-tls-aes-256-gcm-sha384       aes-256-gcm-sha384-suite
+   tls13-st/cipher-suite-tls-chacha20-poly1305-sha256 chacha20-poly1305-sha256-suite})
 
 ;;; named groups
 
@@ -86,11 +87,11 @@
    :bytes->pub-fn ecformat/bytes->x448-pub})
 
 (def named-group-map
-  {0x0017 secp256r1-group
-   0x0018 secp384r1-group
-   0x0019 secp521r1-group
-   0x001d x25519-group
-   0x001e x448-group})
+  {tls13-st/named-group-secp256r1 secp256r1-group
+   tls13-st/named-group-secp384r1 secp384r1-group
+   tls13-st/named-group-secp521r1 secp521r1-group
+   tls13-st/named-group-x25519    x25519-group
+   tls13-st/named-group-x448      x448-group})
 
 (defn sim-agreement
   "Simulate key agreement."
