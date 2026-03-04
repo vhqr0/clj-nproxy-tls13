@@ -192,8 +192,8 @@
 
 (defn init-client-key-shares
   [context]
-  (let [{:keys [supported-named-groups]} context
-        key-shares (->> supported-named-groups (mapv tls13-crypto/gen-key-share))]
+  (let [{:keys [named-groups]} context
+        key-shares (->> named-groups (mapv tls13-crypto/gen-key-share))]
     (merge context {:key-shares key-shares})))
 
 (defn pack-client-extension
