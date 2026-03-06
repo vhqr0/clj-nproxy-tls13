@@ -118,7 +118,7 @@
 (defn hkdf-expand-label
   "Hkdf expand label."
   ^bytes [cipher-suite ^bytes secret ^String label ^bytes context ^Long length]
-  (let [info (st/pack st-hkdf-label length label context)]
+  (let [info (st/pack st-hkdf-label {:length length :label label :context context})]
     (hkdf-expand cipher-suite secret info length)))
 
 ;;; cryptor
@@ -150,7 +150,7 @@
   (let [{:keys [cipher-suite key]} cryptor
         {:keys [aead-encrypt-fn]} (get-cipher-suite cipher-suite)]
     [(update cryptor :sequence inc)
-     (aead-encrypt-fn key (sequenced-iv cryptor) aad)]))
+     (aead-encrypt-fn key (sequenced-iv cryptor) data aad)]))
 
 (defn decrypt
   "Decrypt data, return new cryptor and decrypted data."
@@ -158,7 +158,7 @@
   (let [{:keys [key cipher-suite]} cryptor
         {:keys [aead-decrypt-fn]} (get-cipher-suite cipher-suite)]
     [(update cryptor :sequence inc)
-     (aead-decrypt-fn key (sequenced-iv cryptor) aad)]))
+     (aead-decrypt-fn key (sequenced-iv cryptor) data aad)]))
 
 ;;; named groups
 
@@ -292,3 +292,51 @@
   (let [algo (.getSigAlgName cert)
         ^PublicKey pub (.getPublicKey cert)]
     (crypto/verify algo pub data sig)))
+
+;;; key schedule
+
+(defn derive-secret
+  "Derive secret."
+  ^bytes [cipher-suite ^bytes secret ^String label msgs]
+  (let [digest-size (digest-size cipher-suite)
+        context (apply digest cipher-suite msgs)]
+    (hkdf-expand-label cipher-suite secret label context digest-size)))
+
+(defn early-secret
+  (^bytes [cipher-suite]
+   (let [digest-size (digest-size cipher-suite)]
+     (early-secret cipher-suite (byte-array digest-size))))
+  (^bytes [cipher-suite ^bytes psk]
+   (let [digest-size (digest-size cipher-suite)]
+     (hkdf-extract cipher-suite psk (byte-array digest-size)))))
+
+(defn handshake-secret
+  ^bytes [cipher-suite ^bytes early-secret ^bytes shared-secret]
+  (let [derived (derive-secret cipher-suite early-secret tls13-st/label-derived nil)]
+    (hkdf-extract cipher-suite shared-secret derived)))
+
+;; client hello ... server hello
+(defn client-handshake-secret
+  ^bytes [cipher-suite ^bytes handshake-secret msgs]
+  (derive-secret cipher-suite handshake-secret tls13-st/label-client-handshake msgs))
+
+;; client hello ... server hello
+(defn server-handshake-secret
+  ^bytes [cipher-suite ^bytes handshake-secret msgs]
+  (derive-secret cipher-suite handshake-secret tls13-st/label-server-handshake msgs))
+
+(defn master-secret
+  ^bytes [cipher-suite ^bytes handshake-secret]
+  (let [digest-size (digest-size cipher-suite)
+        derived (derive-secret cipher-suite handshake-secret tls13-st/label-derived nil)]
+    (hkdf-extract cipher-suite (byte-array digest-size) derived)))
+
+;; client hello ... server finished
+(defn client-application-secret
+  ^bytes [cipher-suite ^bytes master-secret msgs]
+  (derive-secret cipher-suite master-secret tls13-st/label-client-application msgs))
+
+;; client hello ... server finished
+(defn server-application-secret
+  ^bytes [cipher-suite ^bytes master-secret msgs]
+  (derive-secret cipher-suite master-secret tls13-st/label-server-application msgs))

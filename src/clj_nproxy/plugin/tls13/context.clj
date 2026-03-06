@@ -6,61 +6,11 @@
 
 (def vec-conj (fnil conj []))
 
-;;; key schedule
-
-(defn derive-secret
-  "Derive secret."
-  ^bytes [cipher-suite ^bytes secret ^String label msgs]
-  (let [digest-size (tls13-crypto/digest-size cipher-suite)
-        context (apply tls13-crypto/digest cipher-suite msgs)]
-    (tls13-crypto/hkdf-expand-label cipher-suite secret label context digest-size)))
-
-(defn early-secret
-  (^bytes [cipher-suite]
-   (let [digest-size (tls13-crypto/digest-size cipher-suite)]
-     (early-secret cipher-suite (byte-array digest-size))))
-  (^bytes [cipher-suite ^bytes psk]
-   (let [digest-size (tls13-crypto/digest-size cipher-suite)]
-     (tls13-crypto/hkdf-extract cipher-suite psk (byte-array digest-size)))))
-
-(defn handshake-secret
-  ^bytes [cipher-suite ^bytes early-secret ^bytes shared-secret]
-  (let [derived (derive-secret cipher-suite early-secret tls13-st/label-derived nil)]
-    (tls13-crypto/hkdf-extract cipher-suite shared-secret derived)))
-
-;; client hello ... server hello
-(defn client-handshake-secret
-  ^bytes [cipher-suite ^bytes handshake-secret msgs]
-  (derive-secret cipher-suite handshake-secret tls13-st/label-client-handshake msgs))
-
-;; client hello ... server hello
-(defn server-handshake-secret
-  ^bytes [cipher-suite ^bytes handshake-secret msgs]
-  (derive-secret cipher-suite handshake-secret tls13-st/label-server-handshake msgs))
-
-(defn master-secret
-  ^bytes [cipher-suite ^bytes handshake-secret]
-  (let [digest-size (tls13-crypto/digest-size cipher-suite)
-        derived (derive-secret cipher-suite handshake-secret tls13-st/label-derived nil)]
-    (tls13-crypto/hkdf-extract cipher-suite (byte-array digest-size) derived)))
-
-;; client hello ... server finished
-(defn client-application-secret
-  ^bytes [cipher-suite ^bytes master-secret msgs]
-  (derive-secret cipher-suite master-secret tls13-st/label-client-application msgs))
-
-;; client hello ... server finished
-(defn server-application-secret
-  ^bytes [cipher-suite ^bytes master-secret msgs]
-  (derive-secret cipher-suite master-secret tls13-st/label-server-application msgs))
-
-;;; context
-
 (defn send-plaintext
   "Send plaintext."
   [context type content]
   (let [record (st/pack tls13-st/st-record {:type type :version tls13-st/version-tls12 :content content})]
-    (update :send-bytes vec-conj record)))
+    (update context :send-bytes vec-conj record)))
 
 (defn encrypt-record
   "Encrypt record, return new cryptor and ciphertext with header."
@@ -68,9 +18,9 @@
   (let [aead-tag-size (tls13-crypto/aead-tag-size cryptor)
         plaintext (tls13-st/pack-inner-plaintext type content)
         header (st/pack tls13-st/st-record-header
-                        tls13-st/content-type-application-data
-                        tls13-st/version-tls12
-                        (+ aead-tag-size (b/length plaintext)))
+                        {:type tls13-st/content-type-application-data
+                         :version tls13-st/version-tls12
+                         :length (+ aead-tag-size (b/length plaintext))})
         [cryptor ciphertext] (tls13-crypto/encrypt cryptor plaintext header)]
     [cryptor (b/cat header ciphertext)]))
 
@@ -78,9 +28,9 @@
   "Decrypt record, return new cryptor, type and content."
   [cryptor ciphertext]
   (let [header (st/pack tls13-st/st-record-header
-                        tls13-st/content-type-application-data
-                        tls13-st/version-tls12
-                        (b/length ciphertext))
+                        {:type tls13-st/content-type-application-data
+                         :version tls13-st/version-tls12
+                         :length (b/length ciphertext)})
         [cryptor plaintext] (tls13-crypto/decrypt cryptor ciphertext header)
         [type content] (tls13-st/unpack-inner-plaintext plaintext)]
     [cryptor type content]))
@@ -149,7 +99,7 @@
 (defn recv-application-ciphertext
   "Recv application ciphertext."
   [context content]
-  (recv-ciphertext context :application-decryptor type content))
+  (recv-ciphertext context :application-decryptor content))
 
 (defn send-change-cipher-spec
   [context]
@@ -158,7 +108,7 @@
    tls13-st/content-type-change-cipher-spec
    (st/pack tls13-st/st-change-cipher-spec tls13-st/change-ciper-spec)))
 
-;;;; client
+;;; client
 
 (def default-client-opts
   {:stage                :wait-server-hello
@@ -318,14 +268,14 @@
 
 (defn init-early-secret
   [{:keys [cipher-suite] :as context}]
-  (merge context {:early-secret (early-secret cipher-suite)}))
+  (merge context {:early-secret (tls13-crypto/early-secret cipher-suite)}))
 
 (defn init-handshake-secret
   [{:keys [cipher-suite early-secret shared-secret handshake-msgs] :as context}]
   (let [digest-size (tls13-crypto/digest-size cipher-suite)
-        handshake-secret (handshake-secret cipher-suite early-secret shared-secret)
-        client-handshake-secret (client-handshake-secret cipher-suite handshake-msgs)
-        server-handshake-secret (server-handshake-secret cipher-suite handshake-msgs)
+        handshake-secret (tls13-crypto/handshake-secret cipher-suite early-secret shared-secret)
+        client-handshake-secret (tls13-crypto/client-handshake-secret cipher-suite handshake-secret handshake-msgs)
+        server-handshake-secret (tls13-crypto/server-handshake-secret cipher-suite handshake-secret handshake-msgs)
         client-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite client-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
         server-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite server-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
         handshake-encryptor (tls13-crypto/->cryptor cipher-suite client-handshake-secret)
@@ -365,7 +315,7 @@
         (merge {:stage :wait-server-ee})
         (recv-record type content))
     tls13-st/content-type-change-cipher-spec
-    (let [change-cipher-spec (st/unpack tls13-st/st-change-cipher-spec)]
+    (let [change-cipher-spec (st/unpack tls13-st/st-change-cipher-spec content)]
       (if (= change-cipher-spec tls13-st/change-ciper-spec)
         (merge context {:stage :wait-server-ee})
         (throw (ex-info "invalid change cipher spec" {:reason ::invalid-change-cipher-spec :change-cipher-spec change-cipher-spec}))))
@@ -389,7 +339,7 @@
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
     (case msg-type
       tls13-st/handshake-type-encrypted-extensions
-      (let [extensions (st/unpack tls13-st/st-handshake-encrypted-extension)]
+      (let [extensions (st/unpack tls13-st/st-handshake-encrypted-extension msg-data)]
         (-> context
             (merge
              {:stage :wait-server-cert-cr
@@ -405,7 +355,7 @@
      (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type}))))
   ([context msg-data]
    (let [{:keys [certificate-request-context certificate-list]}
-         (st/unpack tls13-st/st-handshake-certificate)
+         (st/unpack tls13-st/st-handshake-certificate msg-data)
          certificate-list (->> certificate-list
                                (mapv
                                 (fn [{:keys [cert-data extensions]}]
@@ -440,7 +390,7 @@
       tls13-st/handshake-type-certificate-verify
       (let [{:keys [cipher-suite signature-algorithms server-certificate-list handshake-msgs]} context
             certificate (:certificate (first server-certificate-list))
-            {:keys [algorithm signature]} (st/unpack tls13-st/st-handshake-certificate-verify)]
+            {:keys [algorithm signature]} (st/unpack tls13-st/st-handshake-certificate-verify msg-data)]
         (if (and (contains? algorithm signature-algorithms)
                  (= algorithm (tls13-crypto/cert->signature-scheme certificate)))
           (let [signature-data (tls13-st/pack-signature-data
@@ -471,7 +421,7 @@
               {:certificate-request-context client-certificate-request-context
                :certificate-list (->> client-certificate-list
                                       (map
-                                       (fn [certificate extensions]
+                                       (fn [{:keys [certificate extensions]}]
                                          {:cert-data (tls13-crypto/cert->bytes certificate)
                                           :extensions extensions})))}))))
 
@@ -506,9 +456,9 @@
 
 (defn init-master-secret
   [{:keys [cipher-suite handshake-secret handshake-msgs] :as context}]
-  (let [master-secret (master-secret cipher-suite handshake-secret)
-        client-application-secret (client-application-secret cipher-suite master-secret handshake-msgs)
-        server-application-secret (server-application-secret cipher-suite master-secret handshake-msgs)
+  (let [master-secret (tls13-crypto/master-secret cipher-suite handshake-secret)
+        client-application-secret (tls13-crypto/client-application-secret cipher-suite master-secret handshake-msgs)
+        server-application-secret (tls13-crypto/server-application-secret cipher-suite master-secret handshake-msgs)
         application-encryptor (tls13-crypto/->cryptor cipher-suite client-application-secret)
         application-decryptor (tls13-crypto/->cryptor cipher-suite server-application-secret)]
     (merge
