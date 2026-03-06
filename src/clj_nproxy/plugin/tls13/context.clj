@@ -491,7 +491,7 @@
     context
     (if (some? (:client-private-key context))
       (-> context send-client-certificate send-client-certificate-verify)
-      (throw (ex-info "invalid client auth")))))
+      (throw (ex-info "require client auth" {:reason ::require-client-auth})))))
 
 (defn send-client-finished
   [{:keys [cipher-suite client-handshake-verify-key handshake-msgs] :as context}]
