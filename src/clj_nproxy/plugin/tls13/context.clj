@@ -322,7 +322,7 @@
 
 (defn init-handshake-secret
   [{:keys [cipher-suite early-secret shared-secret handshake-msgs] :as context}]
-  (let [{:keys [digest-size]} cipher-suite
+  (let [digest-size (tls13-crypto/digest-size cipher-suite)
         handshake-secret (handshake-secret cipher-suite early-secret shared-secret)
         client-handshake-secret (client-handshake-secret cipher-suite handshake-msgs)
         server-handshake-secret (server-handshake-secret cipher-suite handshake-msgs)
