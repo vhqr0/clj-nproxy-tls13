@@ -408,8 +408,9 @@
          (st/unpack tls13-st/st-handshake-certificate)
          certificate-list (->> certificate-list
                                (mapv
-                                (fn [{:keys [cert-data]}]
-                                  (tls13-crypto/bytes->cert cert-data))))]
+                                (fn [{:keys [cert-data extensions]}]
+                                  {:certificate (tls13-crypto/bytes->cert cert-data)
+                                   :extensions extensions})))]
      (merge
       context
       {:stage :wait-server-cv
@@ -438,13 +439,14 @@
     (case msg-type
       tls13-st/handshake-type-certificate-verify
       (let [{:keys [cipher-suite signature-algorithms server-certificate-list handshake-msgs]} context
+            certificate (:certificate (first server-certificate-list))
             {:keys [algorithm signature]} (st/unpack tls13-st/st-handshake-certificate-verify)]
         (if (and (contains? algorithm signature-algorithms)
-                 (= algorithm (tls13-crypto/cert->signature-scheme (first server-certificate-list))))
+                 (= algorithm (tls13-crypto/cert->signature-scheme certificate)))
           (let [signature-data (tls13-st/pack-signature-data
                                 tls13-st/server-signature-context-string
                                 (apply tls13-crypto/digest cipher-suite (butlast handshake-msgs)))]
-            (if (tls13-crypto/verify (first server-certificate-list) signature-data signature)
+            (if (tls13-crypto/verify certificate signature-data signature)
               (merge context {:stage :wait-server-finished})
               (throw (ex-info "invalid signature" {:reason ::invalid-signature}))))
           (throw (ex-info "invalid signature algorithm" {:reason ::invalid-signature-algorithm :signature-algorithm algorithm}))))
@@ -469,20 +471,22 @@
               {:certificate-request-context client-certificate-request-context
                :certificate-list (->> client-certificate-list
                                       (map
-                                       (fn [certificate]
-                                         {:cert-data (tls13-crypto/cert->bytes certificate)})))}))))
+                                       (fn [certificate extensions]
+                                         {:cert-data (tls13-crypto/cert->bytes certificate)
+                                          :extensions extensions})))}))))
 
 (defn send-client-certificate-verify
   [context]
   (let [{:keys [cipher-suite client-certificate-list client-private-key handshake-msgs]} context
+        certificate (:certificate (first client-certificate-list))
         signature-data (tls13-st/pack-signature-data
                         tls13-st/client-signature-context-string
                         (apply tls13-crypto/digest cipher-suite handshake-msgs))
-        signature (tls13-crypto/sign (first client-certificate-list) client-private-key signature-data)]
+        signature (tls13-crypto/sign certificate client-private-key signature-data)]
     (send-handshake-ciphertext
      context tls13-st/handshake-type-certificate-verify
      (st/pack tls13-st/st-handshake-certificate-verify
-              {:algorithm (tls13-crypto/cert->signature-scheme (first client-certificate-list))
+              {:algorithm (tls13-crypto/cert->signature-scheme certificate)
                :signature signature}))))
 
 (defn send-client-auth
