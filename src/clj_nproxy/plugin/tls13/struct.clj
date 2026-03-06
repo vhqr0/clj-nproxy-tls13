@@ -297,8 +297,17 @@
 
 (def st-handshake-encrypted-extension st-extension-list)
 
-(def server-context-string "TLS 1.3, server CertificateVerify")
-(def client-context-string "TLS 1.3, client CertificateVerify")
+(def server-signature-context-string "TLS 1.3, server CertificateVerify")
+(def client-signature-context-string "TLS 1.3, client CertificateVerify")
+
+(defn pack-signature-data
+  "Pack signature data."
+  ^bytes [^String context ^bytes data]
+  (b/cat
+   (doto (byte-array 32) (b/fill 0x20))
+   (b/str->bytes context)
+   (byte-array 1)
+   data))
 
 (def certificate-type-x509           0)
 (def certificate-type-raw-public-key 2)

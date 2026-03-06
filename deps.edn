@@ -1,4 +1,4 @@
 {:paths ["src"]
  :deps  {org.clojure/clojure        {:mvn/version "1.12.4"}
-         io.github.vhqr0/clj-nproxy {:git/sha "94ece7c"
-                                     :git/tag "1.0.0-RC9"}}}
+         io.github.vhqr0/clj-nproxy {:git/sha "06c521f"
+                                     :git/tag "1.0.0-RC10"}}}

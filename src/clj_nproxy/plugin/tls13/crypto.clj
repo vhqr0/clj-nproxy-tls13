@@ -5,7 +5,8 @@
             [clj-nproxy.plugin.tls13.struct :as tls13-st]
             [clj-nproxy.plugin.tls13.crypto.ecformat :as ecformat])
   (:import [java.io ByteArrayInputStream]
-           [java.security.cert Certificate CertificateFactory]))
+           [java.security PrivateKey PublicKey]
+           [java.security.cert X509Certificate CertificateFactory]))
 
 (set! clojure.core/*warn-on-reflection* true)
 
@@ -245,19 +246,49 @@
         pub (bytes->pub-fn pub-bytes)]
     (agreement-fn pri pub)))
 
-;;; cert
+;;; signature algorithms
 
 (defn cert->bytes
   "Convert certificate to bytes."
-  ^bytes [^Certificate cert]
+  ^bytes [^X509Certificate cert]
   (.getEncoded cert))
 
 (defn bytes->cert
   "Convert bytes to certificate."
-  ^Certificate [^bytes b]
-  (let [cf (CertificateFactory/getInstance "X509")]
+  ^X509Certificate [^bytes b]
+  (let [fac (CertificateFactory/getInstance "X509")]
     (with-open [is (ByteArrayInputStream. b)]
-      (let [cert (.generateCertificate cf is)]
+      (let [cert (.generateCertificate fac is)]
         (if (zero? (.available is))
           cert
           (throw (ex-info "certificate surplus" {:reason ::certificate-surplus})))))))
+
+(def signature-algo->scheme
+  {"Ed25519"         tls13-st/signature-scheme-ed25519
+   "Ed448"           tls13-st/signature-scheme-ed448
+   "SHA256withECDSA" tls13-st/signature-scheme-ecdsa-secp256r1-sha256
+   "SHA384withECDSA" tls13-st/signature-scheme-ecdsa-secp384r1-sha384
+   "SHA512withECDSA" tls13-st/signature-scheme-ecdsa-secp521r1-sha512
+   "SHA256withRSA"   tls13-st/signature-scheme-rsa-pkcs1-sha256
+   "SHA384withRSA"   tls13-st/signature-scheme-rsa-pkcs1-sha384
+   "SHA512withRSA"   tls13-st/signature-scheme-rsa-pkcs1-sha512})
+
+(defn cert->signature-scheme
+  "Get certificate signature scheme."
+  ^long [^X509Certificate cert]
+  (let [algo (.getSigAlgName cert)]
+    (or (get signature-algo->scheme algo)
+        (throw (ex-info "invalid certificate algorithm" {:reason ::invalid-certificate-algorithm :certificate-algorithm algo})))))
+
+(defn sign
+  "Sign signature."
+  ^bytes [^X509Certificate cert ^PrivateKey pri ^bytes data]
+  (let [algo (.getSigAlgName cert)]
+    (crypto/sign algo pri data)))
+
+(defn verify
+  "Verify signature."
+  ^Boolean [^X509Certificate cert ^bytes data ^bytes sig]
+  (let [algo (.getSigAlgName cert)
+        ^PublicKey pub (.getPublicKey cert)]
+    (crypto/verify algo pub data sig)))
