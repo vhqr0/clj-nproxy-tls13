@@ -112,8 +112,13 @@
 
 (defn recv-application-ciphertext
   "Recv application ciphertext."
-  [context content]
-  (recv-ciphertext context :application-decryptor content))
+  ([context type content]
+   (case type
+     tls13-st/content-type-application-data
+     (recv-application-ciphertext context content)
+     (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
+  ([context content]
+   (recv-ciphertext context :application-decryptor content)))
 
 (defn send-change-cipher-spec
   "Send change cipher spec."
@@ -775,3 +780,52 @@
           (verify-finished msg-data)
           init-master-secret)
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
+
+;;; connection
+
+(defmethod recv-record :connected [context type content]
+  (if (:read-close? context)
+    (throw (ex-info "read data surplus" {:reason ::read-data-surplus}))
+    (let [[context type content] (recv-application-ciphertext context type content)]
+      (case type
+        tls13-st/content-type-application-data
+        (update context :recv-bytes vec-conj content)
+        tls13-st/content-type-alert
+        (let [{:keys [level description]} (st/unpack tls13-st/st-alert content)]
+          (if (and (= level tls13-st/alert-level-warning)
+                   (= description tls13-st/alert-description-close-notify))
+            (assoc context :read-close? true)
+            (throw (ex-info "alert" {:reason ::alert :level level :description description}))))
+        tls13-st/content-type-handshake
+        (let [{:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
+          (case msg-type
+            tls13-st/handshake-type-new-session-ticket
+            (merge context {:new-session-ticket (st/unpack tls13-st/st-handshake-new-session-ticket msg-data)})
+            (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type}))))
+        (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))))
+
+(defn check-writable
+  "Check context writable."
+  [{:keys [stage write-close?] :as context}]
+  (if (and (= stage :connected) (not write-close?))
+    context
+    (throw (ex-info "write data surplus" {:reason ::write-data-surplus}))))
+
+(defn send-application-data
+  "Send application data."
+  [context content]
+  (-> context
+      check-writable
+      (send-application-ciphertext tls13-st/content-type-application-data content)))
+
+(defn send-close-notify
+  "Send close notify."
+  [context]
+  (-> context
+      check-writable
+      (merge {:write-close? true})
+      (send-application-ciphertext
+       tls13-st/content-type-alert
+       (st/pack tls13-st/st-alert
+                {:level tls13-st/alert-level-warning
+                 :description tls13-st/alert-description-close-notify}))))
