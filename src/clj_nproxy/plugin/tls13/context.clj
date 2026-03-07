@@ -127,6 +127,114 @@
       context
       (throw (ex-info "invalid change cipher spec" {:reason ::invalid-change-cipher-spec :change-cipher-spec change-cipher-spec})))))
 
+(defn init-random
+  "Init random."
+  [{:keys [mode] :as context}]
+  (let [random-key (case mode :client :client-random :server :server-random)]
+    (assoc context random-key (b/rand 32))))
+
+(defn init-early-secret
+  "Init early secret."
+  [{:keys [cipher-suite] :as context}]
+  (merge context {:early-secret (tls13-crypto/early-secret cipher-suite)}))
+
+(defn init-handshake-secret
+  "Init handshake secret."
+  [{:keys [mode cipher-suite early-secret shared-secret handshake-msgs] :as context}]
+  (let [digest-size (tls13-crypto/digest-size cipher-suite)
+        handshake-secret (tls13-crypto/handshake-secret cipher-suite early-secret shared-secret)
+        client-handshake-secret (tls13-crypto/client-handshake-secret cipher-suite handshake-secret handshake-msgs)
+        server-handshake-secret (tls13-crypto/server-handshake-secret cipher-suite handshake-secret handshake-msgs)
+        client-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite client-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
+        server-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite server-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
+        handshake-encryptor (tls13-crypto/->cryptor cipher-suite (case mode :client client-handshake-secret :server server-handshake-secret))
+        handshake-decryptor (tls13-crypto/->cryptor cipher-suite (case mode :client server-handshake-secret :server client-handshake-secret))]
+    (merge
+     context
+     {:handshake-secret handshake-secret
+      :client-handshake-secret client-handshake-secret
+      :server-handshake-secret server-handshake-secret
+      :client-handshake-verify-key client-handshake-verify-key
+      :server-handshake-verify-key server-handshake-verify-key
+      :handshake-encryptor handshake-encryptor
+      :handshake-decryptor handshake-decryptor})))
+
+(defn init-master-secret
+  "Init master secret."
+  [{:keys [mode cipher-suite handshake-secret handshake-msgs] :as context}]
+  (let [master-secret (tls13-crypto/master-secret cipher-suite handshake-secret)
+        client-application-secret (tls13-crypto/client-application-secret cipher-suite master-secret handshake-msgs)
+        server-application-secret (tls13-crypto/server-application-secret cipher-suite master-secret handshake-msgs)
+        application-encryptor (tls13-crypto/->cryptor cipher-suite (case mode :client client-application-secret :server server-application-secret))
+        application-decryptor (tls13-crypto/->cryptor cipher-suite (case mode :client server-application-secret :server client-application-secret))]
+    (merge
+     context
+     {:master-secret master-secret
+      :client-application-secret client-application-secret
+      :server-application-secret server-application-secret
+      :application-decryptor application-decryptor
+      :application-encryptor application-encryptor})))
+
+(defn send-certificate
+  "Send certificate."
+  [context certificate-list certificate-request-context]
+  (send-handshake-ciphertext
+   context tls13-st/handshake-type-certificate
+   (st/pack tls13-st/st-handshake-certificate
+            {:certificate-request-context certificate-request-context
+             :certificate-list (->> certificate-list
+                                    (map
+                                     (fn [{:keys [certificate extensions]}]
+                                       {:cert-data (tls13-crypto/cert->bytes certificate)
+                                        :extensions extensions})))})))
+
+(defn send-certificate-verify
+  "Send certificate verify."
+  [context certificate-list private-key]
+  (let [{:keys [mode cipher-suite handshake-msgs]} context
+        certificate (:certificate (first certificate-list))
+        signature-data (tls13-st/pack-signature-data
+                        (case mode
+                          :client tls13-st/client-signature-context-string
+                          :server tls13-st/server-signature-context-string)
+                        (apply tls13-crypto/digest cipher-suite handshake-msgs))
+        signature (tls13-crypto/sign certificate private-key signature-data)]
+    (send-handshake-ciphertext
+     context tls13-st/handshake-type-certificate-verify
+     (st/pack tls13-st/st-handshake-certificate-verify
+              {:algorithm (tls13-crypto/cert->signature-scheme certificate)
+               :signature signature}))))
+
+(defn send-auth
+  "Send auth."
+  [context certificate-list private-key certificate-request-context]
+  (-> context
+      (send-certificate certificate-list certificate-request-context)
+      (send-certificate-verify certificate-list private-key)))
+
+(defn send-finished
+  "Send finished."
+  [{:keys [mode cipher-suite handshake-msgs] :as context}]
+  (let [verify (tls13-crypto/hmac cipher-suite
+                                  (case mode
+                                    :client (:client-handshake-verify-key context)
+                                    :server (:server-handshake-verify-key context))
+                                  (apply tls13-crypto/digest cipher-suite handshake-msgs))]
+    (send-handshake-ciphertext context tls13-st/handshake-type-finished verify)))
+
+(defn verify-finished
+  "Verify finished."
+  [context msg-data]
+  (let [{:keys [mode cipher-suite handshake-msgs]} context
+        verify (tls13-crypto/hmac cipher-suite
+                                  (case mode
+                                    :client (:server-handshake-verify-key context)
+                                    :server (:client-handshake-verify-key context))
+                                  (apply tls13-crypto/digest cipher-suite (butlast handshake-msgs)))]
+    (if (zero? (b/compare msg-data verify))
+      context
+      (throw (ex-info "invalid finished" {:reason ::invalid-finished})))))
+
 (defmulti recv-record
   "Recv record, return new context."
   (fn [context _type _content] (:stage context)))
@@ -136,7 +244,8 @@
 ;;;; client hello
 
 (def default-client-opts
-  {:stage                :wait-server-hello
+  {:mode                 :client
+   :stage                :wait-server-hello
    :signature-algorithms [tls13-st/signature-scheme-ed25519
                           tls13-st/signature-scheme-ed448
                           tls13-st/signature-scheme-ecdsa-secp256r1-sha256
@@ -149,11 +258,6 @@
                           tls13-st/cipher-suite-tls-aes-256-gcm-sha384
                           tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
    :named-groups         [tls13-st/named-group-x25519]})
-
-(defn init-client-random
-  "Init client random."
-  [context]
-  (merge context {:client-random (b/rand 32)}))
 
 (defn init-client-key-shares
   "Init client key shares."
@@ -241,7 +345,7 @@
   "Construct initial client context."
   [opts]
   (-> (merge default-client-opts opts)
-      init-client-random
+      init-random
       init-client-key-shares
       pack-client-extension-supported-versions
       pack-client-extension-signature-algorithms
@@ -275,32 +379,6 @@
         (throw (ex-info "invalid named group" {:reason ::invalid-named-group :named-group selected-named-group}))))
     (throw (ex-info "no selected key share" {:reason ::no-selected-key-share}))))
 
-(defn init-client-early-secret
-  "Init early secret."
-  [{:keys [cipher-suite] :as context}]
-  (merge context {:early-secret (tls13-crypto/early-secret cipher-suite)}))
-
-(defn init-client-handshake-secret
-  "Init handshake secret."
-  [{:keys [cipher-suite early-secret shared-secret handshake-msgs] :as context}]
-  (let [digest-size (tls13-crypto/digest-size cipher-suite)
-        handshake-secret (tls13-crypto/handshake-secret cipher-suite early-secret shared-secret)
-        client-handshake-secret (tls13-crypto/client-handshake-secret cipher-suite handshake-secret handshake-msgs)
-        server-handshake-secret (tls13-crypto/server-handshake-secret cipher-suite handshake-secret handshake-msgs)
-        client-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite client-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
-        server-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite server-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
-        handshake-encryptor (tls13-crypto/->cryptor cipher-suite client-handshake-secret)
-        handshake-decryptor (tls13-crypto/->cryptor cipher-suite server-handshake-secret)]
-    (merge
-     context
-     {:handshake-secret handshake-secret
-      :client-handshake-secret client-handshake-secret
-      :server-handshake-secret server-handshake-secret
-      :client-handshake-verify-key client-handshake-verify-key
-      :server-handshake-verify-key server-handshake-verify-key
-      :handshake-encryptor handshake-encryptor
-      :handshake-decryptor handshake-decryptor})))
-
 (defmethod recv-record :wait-server-hello [context type content]
   (let [[context msg-type msg-data] (recv-handshake-plaintext context type content)]
     (case msg-type
@@ -316,8 +394,8 @@
                 :server-extensions extensions})
               unpack-server-extension-supported-versions
               unpack-server-extension-key-share
-              init-client-early-secret
-              init-client-handshake-secret)
+              init-early-secret
+              init-handshake-secret)
           (throw (ex-info "invalid cipher suite" {:reason ::invalid-cipher-suite :cipher-suite cipher-suite}))))
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
@@ -417,81 +495,13 @@
 
 ;;;; server finished
 
-(defn verify-server-finished
-  "Verify finished."
-  [context msg-data]
-  (let [{:keys [cipher-suite server-handshake-verify-key handshake-msgs]} context
-        verify (tls13-crypto/hmac cipher-suite
-                                  server-handshake-verify-key
-                                  (apply tls13-crypto/digest cipher-suite (butlast handshake-msgs)))]
-    (if (zero? (b/compare msg-data verify))
-      context
-      (throw (ex-info "invalid finished" {:reason ::invalid-finished})))))
-
-(defn send-client-certificate
-  "Send certificate."
-  [context]
-  (let [{:keys [client-certificate-list client-certificate-request-context]} context]
-    (send-handshake-ciphertext
-     context tls13-st/handshake-type-certificate
-     (st/pack tls13-st/st-handshake-certificate
-              {:certificate-request-context client-certificate-request-context
-               :certificate-list (->> client-certificate-list
-                                      (map
-                                       (fn [{:keys [certificate extensions]}]
-                                         {:cert-data (tls13-crypto/cert->bytes certificate)
-                                          :extensions extensions})))}))))
-
-(defn send-client-certificate-verify
-  "Send certificate verify."
-  [context]
-  (let [{:keys [cipher-suite client-certificate-list client-private-key handshake-msgs]} context
-        certificate (:certificate (first client-certificate-list))
-        signature-data (tls13-st/pack-signature-data
-                        tls13-st/client-signature-context-string
-                        (apply tls13-crypto/digest cipher-suite handshake-msgs))
-        signature (tls13-crypto/sign certificate client-private-key signature-data)]
-    (send-handshake-ciphertext
-     context tls13-st/handshake-type-certificate-verify
-     (st/pack tls13-st/st-handshake-certificate-verify
-              {:algorithm (tls13-crypto/cert->signature-scheme certificate)
-               :signature signature}))))
-
 (defn send-client-auth
   "Send client auth."
   [context]
   (if-not (:client-auth? context)
     context
-    (if (and (some? (:client-certificate-list context))
-             (some? (:client-private-key context)))
-      (-> context
-          send-client-certificate
-          send-client-certificate-verify)
-      (throw (ex-info "require client auth" {:reason ::require-client-auth})))))
-
-(defn send-client-finished
-  "Send finished."
-  [{:keys [cipher-suite client-handshake-verify-key handshake-msgs] :as context}]
-  (let [verify (tls13-crypto/hmac cipher-suite
-                                  client-handshake-verify-key
-                                  (apply tls13-crypto/digest cipher-suite handshake-msgs))]
-    (send-handshake-ciphertext context tls13-st/handshake-type-finished verify)))
-
-(defn init-client-master-secret
-  "Init master secret."
-  [{:keys [cipher-suite handshake-secret handshake-msgs] :as context}]
-  (let [master-secret (tls13-crypto/master-secret cipher-suite handshake-secret)
-        client-application-secret (tls13-crypto/client-application-secret cipher-suite master-secret handshake-msgs)
-        server-application-secret (tls13-crypto/server-application-secret cipher-suite master-secret handshake-msgs)
-        application-encryptor (tls13-crypto/->cryptor cipher-suite client-application-secret)
-        application-decryptor (tls13-crypto/->cryptor cipher-suite server-application-secret)]
-    (merge
-     context
-     {:master-secret master-secret
-      :client-application-secret client-application-secret
-      :server-application-secret server-application-secret
-      :application-decryptor application-decryptor
-      :application-encryptor application-encryptor})))
+    (let [{:keys [client-certificate-list client-private-key server-certificate-request-context]} context]
+      (send-auth context client-certificate-list client-private-key server-certificate-request-context))))
 
 (defmethod recv-record :wait-server-finished [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
@@ -499,11 +509,11 @@
       tls13-st/handshake-type-finished
       (-> context
           (merge {:stage :connected})
-          (verify-server-finished msg-data)
+          (verify-finished msg-data)
           send-change-cipher-spec
           send-client-auth
-          send-client-finished
-          init-client-master-secret)
+          send-finished
+          init-master-secret)
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
 ;;; server
@@ -511,25 +521,21 @@
 ;;;; server hello
 
 (def default-server-opts
-  {:stage                :wait-client-hello
-   :cipher-suites        [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
-                          tls13-st/cipher-suite-tls-aes-256-gcm-sha384
-                          tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
-   :named-groups         [tls13-st/named-group-x25519
-                          tls13-st/named-group-x448
-                          tls13-st/named-group-secp256r1
-                          tls13-st/named-group-secp384r1
-                          tls13-st/named-group-secp521r1]})
+  {:mode          :server
+   :stage         :wait-client-hello
+   :cipher-suites [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
+                   tls13-st/cipher-suite-tls-aes-256-gcm-sha384
+                   tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
+   :named-groups  [tls13-st/named-group-x25519
+                   tls13-st/named-group-x448
+                   tls13-st/named-group-secp256r1
+                   tls13-st/named-group-secp384r1
+                   tls13-st/named-group-secp521r1]})
 
 (defn ->server-context
   "Construct server context."
   [opts]
   (merge default-server-opts opts))
-
-(defn init-server-random
-  "Init server random."
-  [context]
-  (merge context {:server-random (b/rand 32)}))
 
 (defn unpack-client-extension-supported-versions
   "Unpack supported versions extension."
@@ -631,32 +637,6 @@
                :legacy-compression-method tls13-st/compression-method-null
                :extensions server-extensions}))))
 
-(defn init-server-early-secret
-  "Init early secret."
-  [{:keys [cipher-suite] :as context}]
-  (merge context {:early-secret (tls13-crypto/early-secret cipher-suite)}))
-
-(defn init-server-handshake-secret
-  "Init handshake secret."
-  [{:keys [cipher-suite early-secret shared-secret handshake-msgs] :as context}]
-  (let [digest-size (tls13-crypto/digest-size cipher-suite)
-        handshake-secret (tls13-crypto/handshake-secret cipher-suite early-secret shared-secret)
-        client-handshake-secret (tls13-crypto/client-handshake-secret cipher-suite handshake-secret handshake-msgs)
-        server-handshake-secret (tls13-crypto/server-handshake-secret cipher-suite handshake-secret handshake-msgs)
-        client-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite client-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
-        server-handshake-verify-key (tls13-crypto/hkdf-expand-label cipher-suite server-handshake-secret tls13-st/label-finished (byte-array 0) digest-size)
-        handshake-encryptor (tls13-crypto/->cryptor cipher-suite server-handshake-secret)
-        handshake-decryptor (tls13-crypto/->cryptor cipher-suite client-handshake-secret)]
-    (merge
-     context
-     {:handshake-secret handshake-secret
-      :client-handshake-secret client-handshake-secret
-      :server-handshake-secret server-handshake-secret
-      :client-handshake-verify-key client-handshake-verify-key
-      :server-handshake-verify-key server-handshake-verify-key
-      :handshake-encryptor handshake-encryptor
-      :handshake-decryptor handshake-decryptor})))
-
 (defn send-server-encrypted-extensions
   "Send encrypted extensions."
   [context]
@@ -665,49 +645,11 @@
      context tls13-st/handshake-type-encrypted-extensions
      (st/pack tls13-st/st-handshake-encrypted-extensions server-encrypted-extensions))))
 
-(defn send-server-certificate
-  "Send certificate."
-  [context]
-  (let [{:keys [server-certificate-list]} context]
-    (send-handshake-ciphertext
-     context tls13-st/handshake-type-certificate
-     (st/pack tls13-st/st-handshake-certificate
-              {:certificate-request-context (byte-array 0)
-               :certificate-list (->> server-certificate-list
-                                      (map
-                                       (fn [{:keys [certificate extensions]}]
-                                         {:cert-data (tls13-crypto/cert->bytes certificate)
-                                          :extensions extensions})))}))))
-
-(defn send-server-certificate-verify
-  "Send certificate verify."
-  [context]
-  (let [{:keys [cipher-suite server-certificate-list server-private-key handshake-msgs]} context
-        certificate (:certificate (first server-certificate-list))
-        signature-data (tls13-st/pack-signature-data
-                        tls13-st/server-signature-context-string
-                        (apply tls13-crypto/digest cipher-suite handshake-msgs))
-        signature (tls13-crypto/sign certificate server-private-key signature-data)]
-    (send-handshake-ciphertext
-     context tls13-st/handshake-type-certificate-verify
-     (st/pack tls13-st/st-handshake-certificate-verify
-              {:algorithm (tls13-crypto/cert->signature-scheme certificate)
-               :signature signature}))))
-
 (defn send-server-auth
   "Send server auth."
   [context]
-  (-> context
-      send-server-certificate
-      send-server-certificate-verify))
-
-(defn send-server-finished
-  "Send finished."
-  [{:keys [cipher-suite server-handshake-verify-key handshake-msgs] :as context}]
-  (let [verify (tls13-crypto/hmac cipher-suite
-                                  server-handshake-verify-key
-                                  (apply tls13-crypto/digest cipher-suite handshake-msgs))]
-    (send-handshake-ciphertext context tls13-st/handshake-type-finished verify)))
+  (let [{:keys [server-certificate-list server-private-key]} context]
+    (send-auth context server-certificate-list server-private-key (byte-array 0))))
 
 (defmethod recv-record :wait-client-hello [context type content]
   (let [[context msg-type msg-data] (recv-handshake-plaintext context type content)]
@@ -722,7 +664,7 @@
                 :cipher-suite cipher-suite
                 :client-random random
                 :client-extensions extensions})
-              init-server-random
+              init-random
               unpack-client-extension-supported-versions
               unpack-client-extension-key-share
               unpack-client-extension-server-name
@@ -733,42 +675,15 @@
               pack-server-encrypted-extension-application-layer-protocol-negotiation
               send-server-hello
               send-change-cipher-spec
-              init-server-early-secret
-              init-server-handshake-secret
+              init-early-secret
+              init-handshake-secret
               send-server-encrypted-extensions
               send-server-auth
-              send-server-finished)
+              send-finished)
           (throw (ex-info "invalid cipher suites" {:reason ::invalid-cipher-suites :cipher-suites cipher-suites}))))
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
 ;;;; finished
-
-(defn verify-client-finished
-  "Verify finished."
-  [context msg-data]
-  (let [{:keys [cipher-suite client-handshake-verify-key handshake-msgs]} context
-        verify (tls13-crypto/hmac cipher-suite
-                                  client-handshake-verify-key
-                                  (apply tls13-crypto/digest cipher-suite (butlast handshake-msgs)))]
-    (if (zero? (b/compare msg-data verify))
-      context
-      (throw (ex-info "invalid finished" {:reason ::invalid-finished})))))
-
-(defn init-server-master-secret
-  "Init master secret."
-  [{:keys [cipher-suite handshake-secret handshake-msgs] :as context}]
-  (let [master-secret (tls13-crypto/master-secret cipher-suite handshake-secret)
-        client-application-secret (tls13-crypto/client-application-secret cipher-suite master-secret handshake-msgs)
-        server-application-secret (tls13-crypto/server-application-secret cipher-suite master-secret handshake-msgs)
-        application-encryptor (tls13-crypto/->cryptor cipher-suite server-application-secret)
-        application-decryptor (tls13-crypto/->cryptor cipher-suite client-application-secret)]
-    (merge
-     context
-     {:master-secret master-secret
-      :client-application-secret client-application-secret
-      :server-application-secret server-application-secret
-      :application-decryptor application-decryptor
-      :application-encryptor application-encryptor})))
 
 (defmethod recv-record :wait-client-finished [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
@@ -776,6 +691,6 @@
       tls13-st/handshake-type-finished
       (-> context
           (merge {:stage :connected})
-          (verify-client-finished msg-data)
-          init-server-master-secret)
+          (verify-finished msg-data)
+          init-master-secret)
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
