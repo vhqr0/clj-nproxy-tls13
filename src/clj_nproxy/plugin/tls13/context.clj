@@ -470,7 +470,15 @@
 (defmethod recv-record :wait-server-ccs-ee [context type content]
   (recv-change-cipher-spec-maybe context type content :wait-server-ee))
 
+(defn unpack-server-encrypted-extension-server-name
+  "Unpack server name extension."
+  [context]
+  (cond-> context
+    (some? (find-extension context :server-encrypted-extensions tls13-st/extension-type-application-layer-protocol-negotiation))
+    (merge {:accept-server-name? true})))
+
 (defn unpack-server-encrypted-extension-application-layer-protocol-negotiation
+  "Unpack application layer protocol negotiation extension."
   [{:keys [application-protocols] :as context}]
   (if-let [[_ extension] (find-extension context :server-encrypted-extensions tls13-st/extension-type-application-layer-protocol-negotiation)]
     (let [selected-application-protocols (st/unpack tls13-st/st-extension-application-layer-protocol-negotiation extension)]
@@ -489,6 +497,7 @@
       (let [extensions (st/unpack tls13-st/st-handshake-encrypted-extensions msg-data)]
         (-> context
             (merge {:stage :wait-server-cert-cr :server-encrypted-extensions extensions})
+            unpack-server-encrypted-extension-server-name
             unpack-server-encrypted-extension-application-layer-protocol-negotiation))
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
