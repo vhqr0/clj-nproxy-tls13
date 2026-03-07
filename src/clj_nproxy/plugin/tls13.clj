@@ -10,18 +10,19 @@
 (defn wrap
   "Wrap tls13 on stream."
   [{is :input-stream os :output-stream} context]
-  (let [acontext (loop [context context]
-                   (let [{:keys [stage send-bytes]} context]
-                     (if (seq send-bytes)
-                       (do
-                         (run! (partial st/write os) send-bytes)
-                         (st/flush os)
-                         (recur (dissoc context :send-bytes)))
-                       (if (= stage :connected)
-                         (atom context)
-                         (let [{:keys [type content]} (st/read-struct tls13-st/st-record is)]
-                           (recur (tls13-ctx/recv-record context type content)))))))
+  (let [context (loop [context context]
+                  (let [{:keys [stage send-bytes]} context]
+                    (if (seq send-bytes)
+                      (do
+                        (run! (partial st/write os) send-bytes)
+                        (st/flush os)
+                        (recur (dissoc context :send-bytes)))
+                      (if (= stage :connected)
+                        context
+                        (let [{:keys [type content]} (st/read-struct tls13-st/st-record is)]
+                          (recur (tls13-ctx/recv-record context type content)))))))
         ;; TODO verify certificate
+        acontext (atom context)
         read-fn (fn []
                   (let [{:keys [recv-bytes read-close?]} @acontext]
                     (if (seq recv-bytes)
