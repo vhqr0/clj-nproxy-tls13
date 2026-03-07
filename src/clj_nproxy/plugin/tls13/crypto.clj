@@ -220,6 +220,7 @@
   )
 
 (defn get-named-group
+  "Get named group."
   [named-group]
   (or (get named-group-map named-group)
       (throw (ex-info "invalid named group" {:reason ::invalid-named-group :named-group named-group}))))
@@ -303,6 +304,7 @@
     (hkdf-expand-label cipher-suite secret label context digest-size)))
 
 (defn early-secret
+  "Derive early secret."
   (^bytes [cipher-suite]
    (let [digest-size (digest-size cipher-suite)]
      (early-secret cipher-suite (byte-array digest-size))))
@@ -311,21 +313,25 @@
      (hkdf-extract cipher-suite psk (byte-array digest-size)))))
 
 (defn handshake-secret
+  "Derive handshake secret."
   ^bytes [cipher-suite ^bytes early-secret ^bytes shared-secret]
   (let [derived (derive-secret cipher-suite early-secret tls13-st/label-derived nil)]
     (hkdf-extract cipher-suite shared-secret derived)))
 
 ;; client hello ... server hello
 (defn client-handshake-secret
+  "Expand client handshake secret."
   ^bytes [cipher-suite ^bytes handshake-secret msgs]
   (derive-secret cipher-suite handshake-secret tls13-st/label-client-handshake msgs))
 
 ;; client hello ... server hello
 (defn server-handshake-secret
+  "Expand server handshake secret."
   ^bytes [cipher-suite ^bytes handshake-secret msgs]
   (derive-secret cipher-suite handshake-secret tls13-st/label-server-handshake msgs))
 
 (defn master-secret
+  "Derive master secret."
   ^bytes [cipher-suite ^bytes handshake-secret]
   (let [digest-size (digest-size cipher-suite)
         derived (derive-secret cipher-suite handshake-secret tls13-st/label-derived nil)]
@@ -333,10 +339,12 @@
 
 ;; client hello ... server finished
 (defn client-application-secret
+  "Expand client application secret."
   ^bytes [cipher-suite ^bytes master-secret msgs]
   (derive-secret cipher-suite master-secret tls13-st/label-client-application msgs))
 
-;; client hello ... server finished
+;; client hello ... server finished / client certificate verify
 (defn server-application-secret
+  "Expand server application secret."
   ^bytes [cipher-suite ^bytes master-secret msgs]
   (derive-secret cipher-suite master-secret tls13-st/label-server-application msgs))

@@ -6,6 +6,16 @@
 
 (def vec-conj (fnil conj []))
 
+(defn pack-extension
+  "Pack extension."
+  [context extensions-key type extension]
+  (update context extensions-key vec-conj [type extension]))
+
+(defn find-extension
+  "Find extension."
+  [context extensions-key type]
+  (->> (get context extensions-key) (filter #(= type (first %))) first))
+
 (defn send-plaintext
   "Send plaintext."
   [context type content]
@@ -102,13 +112,28 @@
   (recv-ciphertext context :application-decryptor content))
 
 (defn send-change-cipher-spec
+  "Send change cipher spec."
   [context]
   (send-plaintext
    context
    tls13-st/content-type-change-cipher-spec
    (st/pack tls13-st/st-change-cipher-spec tls13-st/change-ciper-spec)))
 
+(defn recv-change-cipher-spec
+  "Recv change cipher spec."
+  [context content]
+  (let [change-cipher-spec (st/unpack tls13-st/st-change-cipher-spec content)]
+    (if (= change-cipher-spec tls13-st/change-ciper-spec)
+      context
+      (throw (ex-info "invalid change cipher spec" {:reason ::invalid-change-cipher-spec :change-cipher-spec change-cipher-spec})))))
+
+(defmulti recv-record
+  "Recv record, return new context."
+  (fn [context _type _content] (:stage context)))
+
 ;;; client
+
+;;;; client hello
 
 (def default-client-opts
   {:stage                :wait-server-hello
@@ -125,59 +150,47 @@
                           tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
    :named-groups         [tls13-st/named-group-x25519]})
 
-(declare init-client-random)
-(declare init-client-key-shares)
-(declare pack-client-extensions)
-(declare send-client-hello)
-
-(defn init-client-context
-  "construct initial client context."
-  [opts]
-  (-> (merge default-client-opts opts)
-      init-client-random
-      init-client-key-shares
-      pack-client-extensions
-      send-client-hello))
-
 (defn init-client-random
+  "Init client random."
   [context]
   (merge context {:client-random (b/rand 32)}))
 
 (defn init-client-key-shares
+  "Init client key shares."
   [context]
   (let [{:keys [named-groups]} context
         key-shares (->> named-groups (mapv tls13-crypto/gen-key-share))]
     (merge context {:key-shares key-shares})))
 
-(defn pack-client-extension
-  [context type extension]
-  (update context :client-extensions vec-conj [type extension]))
-
 (defn pack-client-extension-supported-versions
+  "Pack supported versions extension."
   [context]
-  (pack-client-extension
-   context
+  (pack-extension
+   context :client-extensions
    tls13-st/extension-type-supported-versions
    (st/pack tls13-st/st-extension-supported-versions-client-hello [tls13-st/version-tls13])))
 
 (defn pack-client-extension-signature-algorithms
+  "Pack signature algorithms extension."
   [{:keys [signature-algorithms] :as context}]
-  (pack-client-extension
-   context
+  (pack-extension
+   context :client-extensions
    tls13-st/extension-type-signature-algorithms
    (st/pack tls13-st/st-extension-signature-algorithms signature-algorithms)))
 
 (defn pack-client-extension-supported-groups
+  "Pack supported groups extension."
   [{:keys [named-groups] :as context}]
-  (pack-client-extension
-   context
+  (pack-extension
+   context :client-extensions
    tls13-st/extension-type-supported-groups
    (st/pack tls13-st/st-extension-supported-groups named-groups)))
 
 (defn pack-client-extension-key-share
+  "Pack key share extension."
   [{:keys [key-shares] :as context}]
-  (pack-client-extension
-   context
+  (pack-extension
+   context :client-extensions
    tls13-st/extension-type-key-share
    (st/pack tls13-st/st-extension-key-share-client-hello
             (->> key-shares
@@ -186,10 +199,12 @@
                     {:group named-group :key-exchange (tls13-crypto/key-share->pub-bytes key-share)}))))))
 
 (defn pack-client-extension-server-name
+  "Pack server name extension."
   [{:keys [server-names] :as context}]
   (cond-> context
     (seq server-names)
-    (pack-client-extension
+    (pack-extension
+     :client-extensions
      tls13-st/extension-type-server-name
      (st/pack tls13-st/st-extension-server-name-client-hello
               (->> server-names
@@ -198,25 +213,17 @@
                       {:name-type 0 :name server-name})))))))
 
 (defn pack-client-extension-application-layer-protocol-negotiation
+  "Pack application layer protocol negotiation extension."
   [{:keys [application-protocols] :as context}]
   (cond-> context
     (seq application-protocols)
-    (pack-client-extension
+    (pack-extension
+     :client-extensions
      tls13-st/extension-type-application-layer-protocol-negotiation
      (st/pack tls13-st/st-extension-application-layer-protocol-negotiation application-protocols))))
 
-(defn pack-client-extensions
-  [context]
-  (-> context
-      pack-client-extension-supported-versions
-      pack-client-extension-signature-algorithms
-      pack-client-extension-supported-groups
-      pack-client-extension-key-share
-      pack-client-extension-server-name
-      pack-client-extension-application-layer-protocol-negotiation))
-
 (defn send-client-hello
-  "Second client hello."
+  "Send client hello."
   [context]
   (let [{:keys [client-random cipher-suites client-extensions]} context]
     (send-handshake-plaintext
@@ -230,21 +237,33 @@
                :legacy-compression-methods [tls13-st/compression-method-null]
                :extensions client-extensions}))))
 
-(defmulti recv-record
-  "Recv record, return new context."
-  (fn [context _type _content] (:stage context)))
+(defn ->client-context
+  "Construct initial client context."
+  [opts]
+  (-> (merge default-client-opts opts)
+      init-client-random
+      init-client-key-shares
+      pack-client-extension-supported-versions
+      pack-client-extension-signature-algorithms
+      pack-client-extension-supported-groups
+      pack-client-extension-key-share
+      pack-client-extension-server-name
+      pack-client-extension-application-layer-protocol-negotiation
+      send-client-hello))
 
-(defn check-cipher-suite
+;;;; server hello
+
+(defn check-server-cipher-suite
+  "Check cipher suite."
   [{:keys [cipher-suites cipher-suite] :as context}]
   (if (contains? (set cipher-suites) cipher-suite)
     context
     (throw (ex-info "invalid cipher suite" {:reason ::invalid-cipher-suite :cipher-suite cipher-suite}))))
 
 (defn unpack-server-extension-supported-versions
-  [{:keys [server-extensions] :as context}]
-  (if-let [[_ extension] (->> server-extensions
-                              (filter #(= tls13-st/extension-type-supported-versions (first %)))
-                              first)]
+  "Unpack supported versions extension."
+  [context]
+  (if-let [[_ extension] (find-extension context :server-extensions tls13-st/extension-type-supported-versions)]
     (let [selected-version (st/unpack tls13-st/st-extension-supported-versions-server-hello extension)]
       (if (= selected-version tls13-st/version-tls13)
         context
@@ -252,25 +271,24 @@
     (throw (ex-info "no selected version" {:reason ::no-selected-version}))))
 
 (defn unpack-server-extension-key-share
-  [{:keys [server-extensions key-shares] :as context}]
-  (if-let [[_ extension] (->> server-extensions
-                              (filter #(= tls13-st/extension-type-key-share (first %)))
-                              first)]
+  "Unpack key share extension."
+  [{:keys [key-shares] :as context}]
+  (if-let [[_ extension] (find-extension context :server-extensions tls13-st/extension-type-key-share)]
     (let [{:keys [key-exchange] selected-named-group :group}
           (st/unpack tls13-st/st-extension-key-share-server-hello extension)]
-      (if-let [key-share (->> key-shares
-                              (filter #(= selected-named-group (:named-group %)))
-                              first)]
+      (if-let [key-share (->> key-shares (filter #(= selected-named-group (:named-group %))) first)]
         (let [shared-secret (tls13-crypto/key-agreement key-share key-exchange)]
           (merge context {:named-group selected-named-group :shared-secret shared-secret}))
         (throw (ex-info "invalid named group" {:reason ::invalid-named-group :named-group selected-named-group}))))
     (throw (ex-info "no selected key share" {:reason ::no-selected-key-share}))))
 
-(defn init-early-secret
+(defn init-client-early-secret
+  "Init early secret."
   [{:keys [cipher-suite] :as context}]
   (merge context {:early-secret (tls13-crypto/early-secret cipher-suite)}))
 
-(defn init-handshake-secret
+(defn init-client-handshake-secret
+  "Init handshake secret."
   [{:keys [cipher-suite early-secret shared-secret handshake-msgs] :as context}]
   (let [digest-size (tls13-crypto/digest-size cipher-suite)
         handshake-secret (tls13-crypto/handshake-secret cipher-suite early-secret shared-secret)
@@ -301,12 +319,14 @@
               :selected-cipher-suite cipher-suite
               :server-random random
               :server-extensions extensions})
-            check-cipher-suite
+            check-server-cipher-suite
             unpack-server-extension-supported-versions
             unpack-server-extension-key-share
-            init-early-secret
-            init-handshake-secret))
+            init-client-early-secret
+            init-client-handshake-secret))
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
+
+;;;; server encrypted extensions
 
 (defmethod recv-record :wait-server-ccs-ee [context type content]
   (case type
@@ -315,17 +335,14 @@
         (merge {:stage :wait-server-ee})
         (recv-record type content))
     tls13-st/content-type-change-cipher-spec
-    (let [change-cipher-spec (st/unpack tls13-st/st-change-cipher-spec content)]
-      (if (= change-cipher-spec tls13-st/change-ciper-spec)
-        (merge context {:stage :wait-server-ee})
-        (throw (ex-info "invalid change cipher spec" {:reason ::invalid-change-cipher-spec :change-cipher-spec change-cipher-spec}))))
+    (-> context
+        (recv-change-cipher-spec content)
+        (merge {:stage :wait-server-ee}))
     (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
 
 (defn unpack-server-encrypted-extension-application-layer-protocol-negotiation
-  [{:keys [application-protocols server-encrypted-extensions] :as context}]
-  (if-let [[_ extension] (->> server-encrypted-extensions
-                              (filter #(= tls13-st/extension-type-application-layer-protocol-negotiation (first %)))
-                              first)]
+  [{:keys [application-protocols] :as context}]
+  (if-let [[_ extension] (find-extension context :server-encrypted-extensions tls13-st/extension-type-application-layer-protocol-negotiation)]
     (let [selected-application-protocols (st/unpack tls13-st/st-extension-application-layer-protocol-negotiation extension)]
       (if (= 1 (count selected-application-protocols))
         (let [selected-application-protocol (first selected-application-protocols)]
@@ -341,13 +358,14 @@
       tls13-st/handshake-type-encrypted-extensions
       (let [extensions (st/unpack tls13-st/st-handshake-encrypted-extension msg-data)]
         (-> context
-            (merge
-             {:stage :wait-server-cert-cr
-              :server-encrypted-extensions extensions})
+            (merge {:stage :wait-server-cert-cr :server-encrypted-extensions extensions})
             unpack-server-encrypted-extension-application-layer-protocol-negotiation))
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
+;;;; server certificate
+
 (defn recv-server-certificate
+  "Recv server certificate plaintext."
   ([context msg-type msg-data]
    (case msg-type
      tls13-st/handshake-type-certificate
@@ -402,7 +420,10 @@
           (throw (ex-info "invalid signature algorithm" {:reason ::invalid-signature-algorithm :signature-algorithm algorithm}))))
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
+;;;; server finished
+
 (defn verify-server-finished
+  "Verify finished."
   [context msg-data]
   (let [{:keys [cipher-suite server-handshake-verify-key handshake-msgs]} context
         verify (tls13-crypto/hmac cipher-suite
@@ -413,6 +434,7 @@
       (throw (ex-info "invalid finished" {:reason ::invalid-finished})))))
 
 (defn send-client-certificate
+  "Send certificate."
   [context]
   (let [{:keys [client-certificate-list client-certificate-request-context]} context]
     (send-handshake-ciphertext
@@ -426,6 +448,7 @@
                                           :extensions extensions})))}))))
 
 (defn send-client-certificate-verify
+  "Send certificate verify."
   [context]
   (let [{:keys [cipher-suite client-certificate-list client-private-key handshake-msgs]} context
         certificate (:certificate (first client-certificate-list))
@@ -440,21 +463,27 @@
                :signature signature}))))
 
 (defn send-client-auth
+  "Send client auth."
   [context]
   (if-not (:client-auth? context)
     context
-    (if (some? (:client-private-key context))
-      (-> context send-client-certificate send-client-certificate-verify)
+    (if (and (some? (:client-certificate-list context))
+             (some? (:client-private-key context)))
+      (-> context
+          send-client-certificate
+          send-client-certificate-verify)
       (throw (ex-info "require client auth" {:reason ::require-client-auth})))))
 
 (defn send-client-finished
+  "Send finished."
   [{:keys [cipher-suite client-handshake-verify-key handshake-msgs] :as context}]
   (let [verify (tls13-crypto/hmac cipher-suite
                                   client-handshake-verify-key
                                   (apply tls13-crypto/digest cipher-suite handshake-msgs))]
     (send-handshake-ciphertext context tls13-st/handshake-type-finished verify)))
 
-(defn init-master-secret
+(defn init-client-master-secret
+  "Init master secret."
   [{:keys [cipher-suite handshake-secret handshake-msgs] :as context}]
   (let [master-secret (tls13-crypto/master-secret cipher-suite handshake-secret)
         client-application-secret (tls13-crypto/client-application-secret cipher-suite master-secret handshake-msgs)
@@ -479,5 +508,5 @@
           send-change-cipher-spec
           send-client-auth
           send-client-finished
-          init-master-secret)
+          init-client-master-secret)
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
