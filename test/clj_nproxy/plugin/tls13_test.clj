@@ -35,6 +35,16 @@
                                 :named-group tls13-st/named-group-x25519
                                 :server-names ["test.local"]
                                 :application-protocol "http/1.1"}))))))))
+  (testing "handshake secp256r1"
+    (is (some? (st/sim-conn
+                (fn [{is :input-stream os :output-stream}]
+                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->client-context {:named-groups [tls13-st/named-group-secp256r1]}))]
+                    (assert (= (select-keys @acontext [:stage :named-group])
+                               {:stage :connected :named-group tls13-st/named-group-secp256r1}))))
+                (fn [{is :input-stream os :output-stream}]
+                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri}))]
+                    (assert (= (select-keys @acontext [:stage :named-group])
+                               {:stage :connected :named-group tls13-st/named-group-secp256r1}))))))))
   (testing "client auth"
     (is (some? (st/sim-conn
                 (fn [{is :input-stream os :output-stream}]
