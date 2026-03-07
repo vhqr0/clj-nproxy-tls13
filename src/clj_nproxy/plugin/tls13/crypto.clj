@@ -129,7 +129,7 @@
   (let [{:keys [aead-key-size aead-iv-size]} (get-cipher-suite cipher-suite)
         key (hkdf-expand-label cipher-suite secret tls13-st/label-key (byte-array 0) aead-key-size)
         iv (hkdf-expand-label cipher-suite secret tls13-st/label-iv (byte-array 0) aead-iv-size)]
-    {:cipher-suite cipher-suite :key key :iv iv :sequence sequence}))
+    {:cipher-suite cipher-suite :secret secret :key key :iv iv :sequence sequence}))
 
 (defn aead-tag-size
   "Get aead tag size."
@@ -159,6 +159,14 @@
         {:keys [aead-decrypt-fn]} (get-cipher-suite cipher-suite)]
     [(update cryptor :sequence inc)
      (aead-decrypt-fn key (sequenced-iv cryptor) data aad)]))
+
+(defn update-key
+  "Update key."
+  [cryptor]
+  (let [{:keys [cipher-suite secret]} cryptor
+        digest-size (digest-size cipher-suite)
+        secret (hkdf-expand-label cipher-suite secret tls13-st/label-key-update (byte-array 0) digest-size)]
+    (->cryptor cipher-suite secret)))
 
 ;;; named groups
 

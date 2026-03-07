@@ -783,6 +783,42 @@
 
 ;;; connection
 
+(defn recv-application-alert
+  "Recv application alert."
+  [context content]
+  (let [{:keys [level description]} (st/unpack tls13-st/st-alert content)]
+    (if (and (= level tls13-st/alert-level-warning)
+             (= description tls13-st/alert-description-close-notify))
+      (assoc context :read-close? true)
+      (throw (ex-info "alert" {:reason ::alert :level level :description description})))))
+
+(defn recv-new-session-ticket
+  "Recv new session ticket."
+  [context msg-data]
+  (merge context {:new-session-ticket (st/unpack tls13-st/st-handshake-new-session-ticket msg-data)}))
+
+(defn recv-key-update
+  "Recv key update."
+  [context msg-data]
+  (let [key-update (st/unpack tls13-st/st-handshake-key-update msg-data)]
+    (case key-update
+      tls13-st/key-update-not-requested
+      (update context :application-decryptor tls13-crypto/update-key)
+      tls13-st/key-update-requested
+      (merge context {:key-update? true})
+      (throw (ex-info "invalid key update" {:reason ::invalid-key-update :key-update key-update})))))
+
+(defn recv-application-handshake
+  "Recv application handshake."
+  [context content]
+  (let [{:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
+    (case msg-type
+      tls13-st/handshake-type-new-session-ticket
+      (recv-new-session-ticket context msg-data)
+      tls13-st/handshake-type-key-update
+      (recv-key-update context msg-data)
+      (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
+
 (defmethod recv-record :connected [context type content]
   (if (:read-close? context)
     (throw (ex-info "read data surplus" {:reason ::read-data-surplus}))
@@ -791,17 +827,9 @@
         tls13-st/content-type-application-data
         (update context :recv-bytes vec-conj content)
         tls13-st/content-type-alert
-        (let [{:keys [level description]} (st/unpack tls13-st/st-alert content)]
-          (if (and (= level tls13-st/alert-level-warning)
-                   (= description tls13-st/alert-description-close-notify))
-            (assoc context :read-close? true)
-            (throw (ex-info "alert" {:reason ::alert :level level :description description}))))
+        (recv-application-alert context content)
         tls13-st/content-type-handshake
-        (let [{:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
-          (case msg-type
-            tls13-st/handshake-type-new-session-ticket
-            (merge context {:new-session-ticket (st/unpack tls13-st/st-handshake-new-session-ticket msg-data)})
-            (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type}))))
+        (recv-application-handshake context content)
         (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))))
 
 (defn check-writable
@@ -811,8 +839,8 @@
     context
     (throw (ex-info "write data surplus" {:reason ::write-data-surplus}))))
 
-(defn send-application-data
-  "Send application data."
+(defn send-data
+  "Send data."
   [context content]
   (-> context
       check-writable
@@ -829,3 +857,26 @@
        (st/pack tls13-st/st-alert
                 {:level tls13-st/alert-level-warning
                  :description tls13-st/alert-description-close-notify}))))
+
+(defn send-key-update
+  "Send key update."
+  [context]
+  (-> context
+      check-writable
+      (send-application-ciphertext
+       tls13-st/content-type-handshake
+       (st/pack tls13-st/st-handshake
+                {:msg-type tls13-st/handshake-type-key-update
+                 :msg-data (st/pack tls13-st/st-handshake-key-update tls13-st/key-update-not-requested)}))
+      (update :application-encryptor tls13-crypto/update-key)))
+
+(defn send-key-update-request
+  "Send key update request."
+  [context]
+  (-> context
+      check-writable
+      (send-application-ciphertext
+       tls13-st/content-type-handshake
+       (st/pack tls13-st/st-handshake
+                {:msg-type tls13-st/handshake-type-key-update
+                 :msg-data (st/pack tls13-st/st-handshake-key-update tls13-st/key-update-requested)}))))
