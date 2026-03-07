@@ -805,6 +805,7 @@
       tls13-st/key-update-not-requested
       (update context :application-decryptor tls13-crypto/update-key)
       tls13-st/key-update-requested
+      ;; set key update flag
       (merge context {:key-update? true})
       (throw (ex-info "invalid key update" {:reason ::invalid-key-update :key-update key-update})))))
 
@@ -868,7 +869,9 @@
        (st/pack tls13-st/st-handshake
                 {:msg-type tls13-st/handshake-type-key-update
                  :msg-data (st/pack tls13-st/st-handshake-key-update tls13-st/key-update-not-requested)}))
-      (update :application-encryptor tls13-crypto/update-key)))
+      (update :application-encryptor tls13-crypto/update-key)
+      ;; reset key update flag
+      (merge {:key-update? false})))
 
 (defn send-key-update-request
   "Send key update request."

@@ -37,6 +37,8 @@
                           (recur))))))
         write-fn (fn [b]
                    (when-not (zero? (b/length b))
+                     (when (:key-update? @acontext)
+                       (swap! acontext tls13-ctx/send-key-update))
                      (swap! acontext tls13-ctx/send-data b)
                      (let [{:keys [send-bytes]} @acontext]
                        (when (seq send-bytes)
