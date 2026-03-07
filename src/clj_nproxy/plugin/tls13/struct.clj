@@ -304,7 +304,7 @@
   "Pack signature data."
   ^bytes [^String context ^bytes data]
   (b/cat
-   (doto (byte-array 32) (b/fill 0x20))
+   (doto (byte-array 64) (b/fill 0x20))
    (b/str->bytes context)
    (byte-array 1)
    data))
