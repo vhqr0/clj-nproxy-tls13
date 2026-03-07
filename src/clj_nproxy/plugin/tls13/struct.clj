@@ -295,7 +295,7 @@
 (def tls12-random "444F574E47524401")
 (def tls11-random "444F574E47524400")
 
-(def st-handshake-encrypted-extension st-extension-list)
+(def st-handshake-encrypted-extensions st-extension-list)
 
 (def server-signature-context-string "TLS 1.3, server CertificateVerify")
 (def client-signature-context-string "TLS 1.3, client CertificateVerify")
