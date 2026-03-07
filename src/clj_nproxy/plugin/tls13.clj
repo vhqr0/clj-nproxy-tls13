@@ -28,11 +28,12 @@
   (let [read-fn (fn []
                   (let [{:keys [recv-bytes read-close?]} @acontext]
                     (if (seq recv-bytes)
-                      (let [b (apply b/cat recv-bytes)]
+                      (do
                         (swap! acontext update :recv-bytes #(vec (drop (count recv-bytes) %)))
-                        (if-not (zero? (b/length b))
-                          b
-                          (recur)))
+                        (let [b (apply b/cat recv-bytes)]
+                          (if-not (zero? (b/length b))
+                            b
+                            (recur))))
                       (when-not read-close?
                         (let [{:keys [type content]} (st/read-struct tls13-st/st-record is)]
                           (swap! acontext tls13-ctx/recv-record type content)
@@ -49,6 +50,7 @@
                      (swap! acontext tls13-ctx/send-data b)
                      (let [{:keys [send-bytes]} @acontext]
                        (when (seq send-bytes)
+                         (swap! acontext update :send-bytes #(vec (drop (count send-bytes) %)))
                          (run! (partial st/write os) send-bytes)
                          (st/flush os)))))
         close-fn (fn []
