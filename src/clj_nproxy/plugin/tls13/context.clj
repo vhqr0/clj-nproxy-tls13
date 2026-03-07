@@ -177,11 +177,11 @@
 
 (defn send-certificate
   "Send certificate."
-  [context certificate-list certificate-request-context]
+  [context certificate-list]
   (send-handshake-ciphertext
    context tls13-st/handshake-type-certificate
    (st/pack tls13-st/st-handshake-certificate
-            {:certificate-request-context certificate-request-context
+            {:certificate-request-context (byte-array 0)
              :certificate-list (->> certificate-list
                                     (map
                                      (fn [{:keys [certificate extensions]}]
@@ -207,10 +207,62 @@
 
 (defn send-auth
   "Send auth."
-  [context certificate-list private-key certificate-request-context]
-  (-> context
-      (send-certificate certificate-list certificate-request-context)
-      (send-certificate-verify certificate-list private-key)))
+  [{:keys [mode] :as context}]
+  (let [[certificate-list private-key] (case mode
+                                         :client [(:client-certificate-list context) (:client-private-key context)]
+                                         :server [(:server-certificate-list context) (:server-private-key context)])]
+    (-> context
+        (send-certificate certificate-list)
+        (send-certificate-verify certificate-list private-key))))
+
+(defn recv-certificate-plaintext
+  "Recv certificate plaintext."
+  ([context msg-type msg-data]
+   (case msg-type
+     tls13-st/handshake-type-certificate
+     (recv-certificate-plaintext context msg-data)
+     (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type}))))
+  ([context msg-data]
+   (let [{:keys [mode]} context
+         {:keys [certificate-list]} (st/unpack tls13-st/st-handshake-certificate msg-data)
+         certificate-list-key (case mode :client :server-certificate-list :server :client-certificate-list)
+         certificate-list (->> certificate-list
+                               (mapv
+                                (fn [{:keys [cert-data extensions]}]
+                                  {:certificate (tls13-crypto/bytes->cert cert-data)
+                                   :extensions extensions})))]
+     (assoc context certificate-list-key certificate-list))))
+
+(defn recv-certificate
+  "Recv certificate."
+  [context type content]
+  (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
+    (recv-certificate-plaintext context msg-type msg-data)))
+
+(defn recv-certificate-verify
+  "Recv certificate verify."
+  [context type content]
+  (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
+    (case msg-type
+      tls13-st/handshake-type-certificate-verify
+      (let [{:keys [mode cipher-suite signature-algorithms handshake-msgs]} context
+            certificate-list (case mode
+                               :client (:server-certificate-list context)
+                               :server (:client-certificate-list context))
+            certificate (:certificate (first certificate-list))
+            {:keys [algorithm signature]} (st/unpack tls13-st/st-handshake-certificate-verify msg-data)]
+        (if (and (contains? algorithm signature-algorithms)
+                 (= algorithm (tls13-crypto/cert->signature-scheme certificate)))
+          (let [signature-data (tls13-st/pack-signature-data
+                                (case mode
+                                  :client tls13-st/server-signature-context-string
+                                  :server tls13-st/client-signature-context-string)
+                                (apply tls13-crypto/digest cipher-suite (butlast handshake-msgs)))]
+            (if (tls13-crypto/verify certificate signature-data signature)
+              context
+              (throw (ex-info "invalid signature" {:reason ::invalid-signature}))))
+          (throw (ex-info "invalid signature algorithm" {:reason ::invalid-signature-algorithm :signature-algorithm algorithm}))))
+      (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
 (defn send-finished
   "Send finished."
@@ -409,8 +461,8 @@
         (recv-record type content))
     tls13-st/content-type-change-cipher-spec
     (-> context
-        (recv-change-cipher-spec content)
-        (merge {:stage :wait-server-ee}))
+        (merge {:stage :wait-server-ee})
+        (recv-change-cipher-spec content))
     (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
 
 (defn unpack-server-encrypted-extension-application-layer-protocol-negotiation
@@ -437,61 +489,24 @@
 
 ;;;; server certificate
 
-(defn recv-server-certificate
-  "Recv server certificate plaintext."
-  ([context msg-type msg-data]
-   (case msg-type
-     tls13-st/handshake-type-certificate
-     (recv-server-certificate context msg-data)
-     (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type}))))
-  ([context msg-data]
-   (let [{:keys [certificate-request-context certificate-list]}
-         (st/unpack tls13-st/st-handshake-certificate msg-data)
-         certificate-list (->> certificate-list
-                               (mapv
-                                (fn [{:keys [cert-data extensions]}]
-                                  {:certificate (tls13-crypto/bytes->cert cert-data)
-                                   :extensions extensions})))]
-     (merge
-      context
-      {:stage :wait-server-cv
-       :server-certificate-request-context certificate-request-context
-       :server-certificate-list certificate-list}))))
-
 (defmethod recv-record :wait-server-cert-cr [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
     (if (= msg-type tls13-st/handshake-type-certificate-request)
-      (let [{:keys [certificate-request-context extensions]}
-            (st/unpack tls13-st/st-handshake-certificate-request msg-data)]
-        (merge
-         context
-         {:stage :wait-server-cert
-          :client-auth? true
-          :client-certificate-request-context certificate-request-context
-          :server-certificate-reuqest-extensions extensions}))
-      (recv-server-certificate context msg-type msg-data))))
+      (let [{:keys [extensions]} (st/unpack tls13-st/st-handshake-certificate-request msg-data)]
+        (merge context {:stage :wait-server-cert :client-auth? true :server-certificate-request-extensions extensions}))
+      (-> context
+          (merge {:stage :wait-server-cv})
+          (recv-certificate-plaintext msg-type msg-data)))))
 
 (defmethod recv-record :wait-server-cert [context type content]
-  (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
-    (recv-server-certificate context msg-type msg-data)))
+  (-> context
+      (merge {:stage :wait-server-cv})
+      (recv-certificate type content)))
 
 (defmethod recv-record :wait-server-cv [context type content]
-  (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
-    (case msg-type
-      tls13-st/handshake-type-certificate-verify
-      (let [{:keys [cipher-suite signature-algorithms server-certificate-list handshake-msgs]} context
-            certificate (:certificate (first server-certificate-list))
-            {:keys [algorithm signature]} (st/unpack tls13-st/st-handshake-certificate-verify msg-data)]
-        (if (and (contains? algorithm signature-algorithms)
-                 (= algorithm (tls13-crypto/cert->signature-scheme certificate)))
-          (let [signature-data (tls13-st/pack-signature-data
-                                tls13-st/server-signature-context-string
-                                (apply tls13-crypto/digest cipher-suite (butlast handshake-msgs)))]
-            (if (tls13-crypto/verify certificate signature-data signature)
-              (merge context {:stage :wait-server-finished})
-              (throw (ex-info "invalid signature" {:reason ::invalid-signature}))))
-          (throw (ex-info "invalid signature algorithm" {:reason ::invalid-signature-algorithm :signature-algorithm algorithm}))))
-      (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
+  (-> context
+      (merge {:stage :wait-server-finished})
+      (recv-certificate-verify type content)))
 
 ;;;; server finished
 
@@ -500,8 +515,10 @@
   [context]
   (if-not (:client-auth? context)
     context
-    (let [{:keys [client-certificate-list client-private-key server-certificate-request-context]} context]
-      (send-auth context client-certificate-list client-private-key server-certificate-request-context))))
+    (if (and (:client-certificate-list context)
+             (:client-private-key context))
+      (send-auth context)
+      (throw (ex-info "require client auth" {:reason ::require-client-auth})))))
 
 (defmethod recv-record :wait-server-finished [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
@@ -518,19 +535,27 @@
 
 ;;; server
 
-;;;; server hello
+;;;; client hello
 
 (def default-server-opts
-  {:mode          :server
-   :stage         :wait-client-hello
-   :cipher-suites [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
-                   tls13-st/cipher-suite-tls-aes-256-gcm-sha384
-                   tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
-   :named-groups  [tls13-st/named-group-x25519
-                   tls13-st/named-group-x448
-                   tls13-st/named-group-secp256r1
-                   tls13-st/named-group-secp384r1
-                   tls13-st/named-group-secp521r1]})
+  {:mode                 :server
+   :stage                :wait-client-hello
+   :signature-algorithms [tls13-st/signature-scheme-ed25519
+                          tls13-st/signature-scheme-ed448
+                          tls13-st/signature-scheme-ecdsa-secp256r1-sha256
+                          tls13-st/signature-scheme-ecdsa-secp384r1-sha384
+                          tls13-st/signature-scheme-ecdsa-secp521r1-sha512
+                          tls13-st/signature-scheme-rsa-pkcs1-sha256
+                          tls13-st/signature-scheme-rsa-pkcs1-sha384
+                          tls13-st/signature-scheme-rsa-pkcs1-sha512]
+   :cipher-suites        [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
+                          tls13-st/cipher-suite-tls-aes-256-gcm-sha384
+                          tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
+   :named-groups         [tls13-st/named-group-x25519
+                          tls13-st/named-group-x448
+                          tls13-st/named-group-secp256r1
+                          tls13-st/named-group-secp384r1
+                          tls13-st/named-group-secp521r1]})
 
 (defn ->server-context
   "Construct server context."
@@ -580,7 +605,7 @@
   (if (seq (:application-protocols context))
     (if-let [[_ extension] (find-extension context :client-extensions tls13-st/extension-type-application-layer-protocol-negotiation)]
       (let [server-application-protocols (set (:application-protocols context))
-            supported-application-protocols (st/unpack tls13-st/st-extension-application-layer-protocol-negotiation)]
+            supported-application-protocols (st/unpack tls13-st/st-extension-application-layer-protocol-negotiation extension)]
         (if-let [selected-application-protocol (->> supported-application-protocols (some server-application-protocols))]
           (merge context {:application-protocol selected-application-protocol})
           (throw (ex-info "invalid application protocols" {:reason ::invalid-applicatoin-protocols :application-protocols supported-application-protocols}))))
@@ -645,22 +670,46 @@
      context tls13-st/handshake-type-encrypted-extensions
      (st/pack tls13-st/st-handshake-encrypted-extensions server-encrypted-extensions))))
 
+(defn pack-server-certificate-request-extension-signature-algorithms
+  "Pack signature algorithms extension."
+  [{:keys [signature-algorithms] :as context}]
+  (pack-extension
+   context :server-certificate-reuqest-extensions
+   tls13-st/extension-type-signature-algorithms
+   (st/pack tls13-st/st-extension-signature-algorithms signature-algorithms)))
+
+(defn send-server-certificate-request
+  "Send certificate request."
+  [context]
+  (let [{:keys [server-certificate-request-extensions]} context]
+    (send-handshake-ciphertext
+     context tls13-st/handshake-type-certificate-request
+     (st/pack tls13-st/st-handshake-certificate-request
+              {:certificate-request-context (byte-array 0)
+               :extensions server-certificate-request-extensions}))))
+
 (defn send-server-auth
   "Send server auth."
   [context]
-  (let [{:keys [server-certificate-list server-private-key]} context]
-    (send-auth context server-certificate-list server-private-key (byte-array 0))))
+  (let [{:keys [client-auth?]} context
+        context (if-not client-auth?
+                  context
+                  (-> context
+                      pack-server-certificate-request-extension-signature-algorithms
+                      send-server-certificate-request))]
+    (send-auth context)))
 
 (defmethod recv-record :wait-client-hello [context type content]
   (let [[context msg-type msg-data] (recv-handshake-plaintext context type content)]
     (case msg-type
       tls13-st/handshake-type-client-hello
-      (let [server-cipher-suites (set (:cipher-suites context))
+      (let [{:keys [client-auth?]} context
+            server-cipher-suites (set (:cipher-suites context))
             {:keys [random cipher-suites extensions]} (st/unpack tls13-st/st-handshake-client-hello msg-data)]
         (if-let [cipher-suite (->> cipher-suites (some server-cipher-suites))]
           (-> context
               (merge
-               {:stage :wait-client-finished
+               {:stage (if client-auth? :wait-client-ccs-cert :wait-client-ccs-finished)
                 :cipher-suite cipher-suite
                 :client-random random
                 :client-extensions extensions})
@@ -683,7 +732,43 @@
           (throw (ex-info "invalid cipher suites" {:reason ::invalid-cipher-suites :cipher-suites cipher-suites}))))
       (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
 
-;;;; finished
+;;;; client certificate
+
+(defmethod recv-record :wait-client-ccs-cert [context type content]
+  (case type
+    tls13-st/content-type-application-data
+    (-> context
+        (merge {:stage :wait-client-cert})
+        (recv-record type content))
+    tls13-st/content-type-change-cipher-spec
+    (-> context
+        (merge {:stage :wait-client-cert})
+        (recv-change-cipher-spec content))
+    (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
+
+(defmethod recv-record :wait-client-cert [context type content]
+  (-> context
+      (merge {:stage :wait-client-cv})
+      (recv-certificate type content)))
+
+(defmethod recv-record :wait-client-cv [context type content]
+  (-> context
+      (merge {:stage :wait-client-finished})
+      (recv-certificate-verify type content)))
+
+;;;; client finished
+
+(defmethod recv-record :wait-client-ccs-finished [context type content]
+  (case type
+    tls13-st/content-type-application-data
+    (-> context
+        (merge {:stage :wait-client-finished})
+        (recv-record type content))
+    tls13-st/content-type-change-cipher-spec
+    (-> context
+        (merge {:stage :wait-client-finished})
+        (recv-change-cipher-spec content))
+    (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
 
 (defmethod recv-record :wait-client-finished [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
