@@ -9,12 +9,12 @@
 (defn pack-extension
   "Pack extension."
   [context extensions-key type extension]
-  (update context extensions-key vec-conj [type extension]))
+  (update context extensions-key vec-conj {:extension-type type :extension-data extension}))
 
 (defn find-extension
   "Find extension."
   [context extensions-key type]
-  (->> (get context extensions-key) (filter #(= type (first %))) first))
+  (->> (get context extensions-key) (filter #(= type (:extension-type %))) first :extension-data))
 
 (defmulti recv-record
   "Recv record, return new context."
@@ -85,7 +85,7 @@
 (defn recv-handshake-plaintext
   "Recv handshake plaintext, return new context, msg type and msg data."
   ([context type content]
-   (case type
+   (condp = type
      tls13-st/content-type-handshake
      (recv-handshake-plaintext context content)
      (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
@@ -97,7 +97,7 @@
 (defn recv-handshake-ciphertext
   "Recv handshake ciphertext, return new context, msg type and msg data."
   ([context type content]
-   (case type
+   (condp = type
      tls13-st/content-type-application-data
      (recv-handshake-ciphertext context content)
      (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
@@ -113,7 +113,7 @@
 (defn recv-application-ciphertext
   "Recv application ciphertext."
   ([context type content]
-   (case type
+   (condp = type
      tls13-st/content-type-application-data
      (recv-application-ciphertext context content)
      (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
@@ -139,7 +139,7 @@
 (defn recv-change-cipher-spec-maybe
   "Maybe recv change cipher spec, or goto next stage."
   [context type content next-stage]
-  (case type
+  (condp = type
     tls13-st/content-type-application-data
     (-> context
         (merge {:stage next-stage})
@@ -241,7 +241,7 @@
 (defn recv-certificate-plaintext
   "Recv certificate plaintext."
   ([context msg-type msg-data]
-   (case msg-type
+   (condp = msg-type
      tls13-st/handshake-type-certificate
      (recv-certificate-plaintext context msg-data)
      (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type}))))
@@ -266,7 +266,7 @@
   "Recv certificate verify."
   [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
-    (case msg-type
+    (condp = msg-type
       tls13-st/handshake-type-certificate-verify
       (let [{:keys [mode cipher-suite signature-algorithms handshake-msgs]} context
             certificate-list (case mode
@@ -274,7 +274,7 @@
                                :server (:client-certificate-list context))
             certificate (:certificate (first certificate-list))
             {:keys [algorithm signature]} (st/unpack tls13-st/st-handshake-certificate-verify msg-data)]
-        (if (and (contains? algorithm signature-algorithms)
+        (if (and (contains? (set signature-algorithms) algorithm)
                  (= algorithm (tls13-crypto/cert->signature-scheme certificate)))
           (let [signature-data (tls13-st/pack-signature-data
                                 (case mode
@@ -431,7 +431,7 @@
 (defn unpack-server-extension-supported-versions
   "Unpack supported versions extension."
   [context]
-  (if-let [[_ extension] (find-extension context :server-extensions tls13-st/extension-type-supported-versions)]
+  (if-let [extension (find-extension context :server-extensions tls13-st/extension-type-supported-versions)]
     (let [selected-version (st/unpack tls13-st/st-extension-supported-versions-server-hello extension)]
       (if (= selected-version tls13-st/version-tls13)
         context
@@ -441,7 +441,7 @@
 (defn unpack-server-extension-key-share
   "Unpack key share extension."
   [{:keys [key-shares] :as context}]
-  (if-let [[_ extension] (find-extension context :server-extensions tls13-st/extension-type-key-share)]
+  (if-let [extension (find-extension context :server-extensions tls13-st/extension-type-key-share)]
     (let [{:keys [key-exchange] selected-named-group :group}
           (st/unpack tls13-st/st-extension-key-share-server-hello extension)]
       (if-let [key-share (->> key-shares (filter #(= selected-named-group (:named-group %))) first)]
@@ -452,7 +452,7 @@
 
 (defmethod recv-record :wait-server-hello [context type content]
   (let [[context msg-type msg-data] (recv-handshake-plaintext context type content)]
-    (case msg-type
+    (condp = msg-type
       tls13-st/handshake-type-server-hello
       (let [{:keys [cipher-suites]} context
             {:keys [random cipher-suite extensions]} (st/unpack tls13-st/st-handshake-server-hello msg-data)]
@@ -485,7 +485,7 @@
 (defn unpack-server-encrypted-extension-application-layer-protocol-negotiation
   "Unpack application layer protocol negotiation extension."
   [{:keys [application-protocols] :as context}]
-  (if-let [[_ extension] (find-extension context :server-encrypted-extensions tls13-st/extension-type-application-layer-protocol-negotiation)]
+  (if-let [extension (find-extension context :server-encrypted-extensions tls13-st/extension-type-application-layer-protocol-negotiation)]
     (let [selected-application-protocols (st/unpack tls13-st/st-extension-application-layer-protocol-negotiation extension)]
       (if (= 1 (count selected-application-protocols))
         (let [selected-application-protocol (first selected-application-protocols)]
@@ -497,7 +497,7 @@
 
 (defmethod recv-record :wait-server-ee [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
-    (case msg-type
+    (condp = msg-type
       tls13-st/handshake-type-encrypted-extensions
       (let [extensions (st/unpack tls13-st/st-handshake-encrypted-extensions msg-data)]
         (-> context
@@ -541,7 +541,7 @@
 
 (defmethod recv-record :wait-server-finished [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
-    (case msg-type
+    (condp = msg-type
       tls13-st/handshake-type-finished
       (-> context
           (merge {:stage :connected})
@@ -584,8 +584,8 @@
 (defn unpack-client-extension-supported-versions
   "Unpack supported versions extension."
   [context]
-  (if-let [[_ extension] (find-extension context :client-extensions tls13-st/extension-type-supported-versions)]
-    (let [supported-versions (st/unpack tls13-st/st-extension-supported-versions-server-hello extension)]
+  (if-let [extension (find-extension context :client-extensions tls13-st/extension-type-supported-versions)]
+    (let [supported-versions (st/unpack tls13-st/st-extension-supported-versions-client-hello extension)]
       (if (contains? (set supported-versions) tls13-st/version-tls13)
         context
         (throw (ex-info "invalid versions" {:reason ::invalid-versions :versions supported-versions}))))
@@ -594,7 +594,7 @@
 (defn unpack-client-extension-key-share
   "Unpack key share extension."
   [context]
-  (if-let [[_ extension] (find-extension context :client-extensions tls13-st/extension-type-supported-groups)]
+  (if-let [extension (find-extension context :client-extensions tls13-st/extension-type-key-share)]
     (let [server-named-groups (set (:named-groups context))
           supported-key-shares (st/unpack tls13-st/st-extension-key-share-client-hello extension)]
       (if-let [{:keys [key-exchange] selected-named-group :group}
@@ -608,7 +608,7 @@
 (defn unpack-client-extension-server-name
   "Unpack server name extension."
   [context]
-  (if-let [[_ extension] (find-extension context :client-extensions tls13-st/extension-type-supported-groups)]
+  (if-let [extension (find-extension context :client-extensions tls13-st/extension-type-server-name)]
     (let [server-names (->> (st/unpack tls13-st/st-extension-server-name-client-hello extension)
                             (map
                              (fn [{:keys [name-type name]}]
@@ -622,7 +622,7 @@
   "Unpack application layer protocol negotiation extension."
   [context]
   (if (seq (:application-protocols context))
-    (if-let [[_ extension] (find-extension context :client-extensions tls13-st/extension-type-application-layer-protocol-negotiation)]
+    (if-let [extension (find-extension context :client-extensions tls13-st/extension-type-application-layer-protocol-negotiation)]
       (let [server-application-protocols (set (:application-protocols context))
             supported-application-protocols (st/unpack tls13-st/st-extension-application-layer-protocol-negotiation extension)]
         (if-let [selected-application-protocol (->> supported-application-protocols (some server-application-protocols))]
@@ -664,7 +664,8 @@
     (some? application-protocol)
     (pack-extension
      :server-encrypted-extensions
-     tls13-st/extension-type-application-layer-protocol-negotiation [application-protocol])))
+     tls13-st/extension-type-application-layer-protocol-negotiation
+     (st/pack tls13-st/st-extension-application-layer-protocol-negotiation [application-protocol]))))
 
 (defn send-server-hello
   "Send server hello."
@@ -720,7 +721,7 @@
 
 (defmethod recv-record :wait-client-hello [context type content]
   (let [[context msg-type msg-data] (recv-handshake-plaintext context type content)]
-    (case msg-type
+    (condp = msg-type
       tls13-st/handshake-type-client-hello
       (let [{:keys [client-auth?]} context
             server-cipher-suites (set (:cipher-suites context))
@@ -773,7 +774,7 @@
 
 (defmethod recv-record :wait-client-finished [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
-    (case msg-type
+    (condp = msg-type
       tls13-st/handshake-type-finished
       (-> context
           (merge {:stage :connected})
@@ -801,7 +802,7 @@
   "Recv key update."
   [context msg-data]
   (let [key-update (st/unpack tls13-st/st-handshake-key-update msg-data)]
-    (case key-update
+    (condp = key-update
       tls13-st/key-update-not-requested
       (update context :application-decryptor tls13-crypto/update-key)
       tls13-st/key-update-requested
@@ -813,7 +814,7 @@
   "Recv application handshake."
   [context content]
   (let [{:keys [msg-type msg-data]} (st/unpack tls13-st/st-handshake content)]
-    (case msg-type
+    (condp = msg-type
       tls13-st/handshake-type-new-session-ticket
       (recv-new-session-ticket context msg-data)
       tls13-st/handshake-type-key-update
@@ -824,7 +825,7 @@
   (if (:read-close? context)
     (throw (ex-info "read data surplus" {:reason ::read-data-surplus}))
     (let [[context type content] (recv-application-ciphertext context type content)]
-      (case type
+      (condp = type
         tls13-st/content-type-application-data
         (update context :recv-bytes vec-conj content)
         tls13-st/content-type-alert

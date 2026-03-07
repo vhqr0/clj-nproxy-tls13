@@ -5,7 +5,8 @@
             [clj-nproxy.plugin.tls13.struct :as tls13-st]
             [clj-nproxy.plugin.tls13.crypto.ecformat :as ecformat])
   (:import [java.io ByteArrayInputStream]
-           [java.security PrivateKey PublicKey]
+           [java.security PrivateKey PublicKey KeyFactory]
+           [java.security.spec PKCS8EncodedKeySpec X509EncodedKeySpec]
            [java.security.cert X509Certificate CertificateFactory]))
 
 (set! clojure.core/*warn-on-reflection* true)
@@ -129,7 +130,7 @@
   (let [{:keys [aead-key-size aead-iv-size]} (get-cipher-suite cipher-suite)
         key (hkdf-expand-label cipher-suite secret tls13-st/label-key (byte-array 0) aead-key-size)
         iv (hkdf-expand-label cipher-suite secret tls13-st/label-iv (byte-array 0) aead-iv-size)]
-    {:cipher-suite cipher-suite :secret secret :key key :iv iv :sequence sequence}))
+    {:cipher-suite cipher-suite :secret secret :key key :iv iv :sequence 0}))
 
 (defn aead-tag-size
   "Get aead tag size."
@@ -256,6 +257,28 @@
     (agreement-fn pri pub)))
 
 ;;; signature algorithms
+
+(defn pri->bytes
+  "Convert private key to bytes."
+  ^bytes [^PrivateKey pri]
+  (.getEncoded pri))
+
+(defn pub->bytes
+  "Convert public key to bytes."
+  ^bytes [^PublicKey pub]
+  (.getEncoded pub))
+
+(defn bytes->pri
+  "Convert bytes to private key."
+  ^PrivateKey [^String algo ^bytes b]
+  (let [fac (KeyFactory/getInstance algo)]
+    (.generatePrivate fac (PKCS8EncodedKeySpec. b))))
+
+(defn bytes->pub
+  "Convert bytes to public key."
+  ^PublicKey [^String algo ^bytes b]
+  (let [fac (KeyFactory/getInstance algo)]
+    (.generatePublic fac (X509EncodedKeySpec. b))))
 
 (defn cert->bytes
   "Convert certificate to bytes."

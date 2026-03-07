@@ -80,7 +80,7 @@
 (def signature-scheme-rsa-pkcs1-sha1         0x0201)
 (def signature-scheme-ecdsa-sha1             0x0203)
 
-(def st-signature-scheme st/unpack-short-be)
+(def st-signature-scheme st/st-ushort-be)
 (def st-signature-scheme-list
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-signature-scheme)))
@@ -111,7 +111,7 @@
 (def named-group-ffdhe6144 0x0103)
 (def named-group-ffdhe8192 0x0104)
 
-(def st-named-group st/unpack-short-be)
+(def st-named-group st/st-ushort-be)
 (def st-named-group-list
   (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-named-group)))
@@ -383,7 +383,7 @@
    :certificate-extension-values (st/->st-var-bytes st/st-ushort-be)))
 
 (def st-oid-filter-list
-  (-> (st/->st-var-bytes st/unpack-short-be)
+  (-> (st/->st-var-bytes st/st-ushort-be)
       (st/wrap-many-struct st-oid-filter)))
 
 (def st-extension-oid-filters st-oid-filter-list)
