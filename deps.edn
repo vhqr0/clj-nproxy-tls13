@@ -1,4 +1,9 @@
-{:paths ["src"]
- :deps  {org.clojure/clojure        {:mvn/version "1.12.4"}
-         io.github.vhqr0/clj-nproxy {:git/sha "06c521f"
-                                     :git/tag "1.0.0-RC10"}}}
+{:paths   ["src"]
+ :deps    {org.clojure/clojure        {:mvn/version "1.12.4"}
+           io.github.vhqr0/clj-nproxy {:git/sha "801885b"
+                                       :git/tag "1.0.0"}}
+ :aliases {:dev  {:extra-paths ["test"]
+                  :extra-deps  {io.github.matthewdowney/rich-comment-tests {:git/tag "v1.0.3" :git/sha "a8711e9"}}}
+           :test {:extra-deps {lambdaisland/kaocha           {:mvn/version "1.91.1392"}
+                               lambdaisland/kaocha-cloverage {:mvn/version "1.1.89"}}
+                  :main-opts  ["-m" "kaocha.runner" "--plugin" "cloverage"]}}}
