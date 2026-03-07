@@ -16,6 +16,10 @@
   [context extensions-key type]
   (->> (get context extensions-key) (filter #(= type (first %))) first))
 
+(defmulti recv-record
+  "Recv record, return new context."
+  (fn [context _type _content] (:stage context)))
+
 (defn send-plaintext
   "Send plaintext."
   [context type content]
@@ -126,6 +130,20 @@
     (if (= change-cipher-spec tls13-st/change-ciper-spec)
       context
       (throw (ex-info "invalid change cipher spec" {:reason ::invalid-change-cipher-spec :change-cipher-spec change-cipher-spec})))))
+
+(defn recv-change-cipher-spec-maybe
+  "Maybe recv change cipher spec, or goto next stage."
+  [context type content next-stage]
+  (case type
+    tls13-st/content-type-application-data
+    (-> context
+        (merge {:stage next-stage})
+        (recv-record type content))
+    tls13-st/content-type-change-cipher-spec
+    (-> context
+        (merge {:stage next-stage})
+        (recv-change-cipher-spec content))
+    (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
 
 (defn init-random
   "Init random."
@@ -286,10 +304,6 @@
     (if (zero? (b/compare msg-data verify))
       context
       (throw (ex-info "invalid finished" {:reason ::invalid-finished})))))
-
-(defmulti recv-record
-  "Recv record, return new context."
-  (fn [context _type _content] (:stage context)))
 
 ;;; client
 
@@ -454,16 +468,7 @@
 ;;;; server encrypted extensions
 
 (defmethod recv-record :wait-server-ccs-ee [context type content]
-  (case type
-    tls13-st/content-type-application-data
-    (-> context
-        (merge {:stage :wait-server-ee})
-        (recv-record type content))
-    tls13-st/content-type-change-cipher-spec
-    (-> context
-        (merge {:stage :wait-server-ee})
-        (recv-change-cipher-spec content))
-    (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
+  (recv-change-cipher-spec-maybe context type content :wait-server-ee))
 
 (defn unpack-server-encrypted-extension-application-layer-protocol-negotiation
   [{:keys [application-protocols] :as context}]
@@ -735,16 +740,7 @@
 ;;;; client certificate
 
 (defmethod recv-record :wait-client-ccs-cert [context type content]
-  (case type
-    tls13-st/content-type-application-data
-    (-> context
-        (merge {:stage :wait-client-cert})
-        (recv-record type content))
-    tls13-st/content-type-change-cipher-spec
-    (-> context
-        (merge {:stage :wait-client-cert})
-        (recv-change-cipher-spec content))
-    (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
+  (recv-change-cipher-spec-maybe context type content :wait-client-cert))
 
 (defmethod recv-record :wait-client-cert [context type content]
   (-> context
@@ -759,16 +755,7 @@
 ;;;; client finished
 
 (defmethod recv-record :wait-client-ccs-finished [context type content]
-  (case type
-    tls13-st/content-type-application-data
-    (-> context
-        (merge {:stage :wait-client-finished})
-        (recv-record type content))
-    tls13-st/content-type-change-cipher-spec
-    (-> context
-        (merge {:stage :wait-client-finished})
-        (recv-change-cipher-spec content))
-    (throw (ex-info "invalid content type" {:reason ::invalid-content-type :content-type type}))))
+  (recv-change-cipher-spec-maybe context type content :wait-client-finished))
 
 (defmethod recv-record :wait-client-finished [context type content]
   (let [[context msg-type msg-data] (recv-handshake-ciphertext context type content)]
