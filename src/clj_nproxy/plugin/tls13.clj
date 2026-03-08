@@ -57,6 +57,7 @@
                    (swap! acontext tls13-ctx/send-close-notify)
                    (let [{:keys [send-bytes]} @acontext]
                      (when (seq send-bytes)
+                       (swap! acontext update :send-bytes #(vec (drop (count send-bytes) %)))
                        (run! (partial st/write os) send-bytes)
                        (st/flush os))
                      (st/close os)))]
