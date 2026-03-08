@@ -62,10 +62,10 @@
                      (st/close os)))]
     (BufferedOutputStream. (st/write-fn->output-stream write-fn close-fn))))
 
-(defn wrap
+(defn wrap-stream
   "Wrap tls13 on stream."
   ([is os context]
-   (wrap is os context identity))
+   (wrap-stream is os context identity))
   ([is os context handshake-callback]
    (let [context (handshake is os context)
          ;; valid server name, certificate list, etc

@@ -20,7 +20,7 @@
   (testing "handshake"
     (is (some? (st/sim-conn
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->client-context {:server-names ["test.local"] :application-protocols ["http/2" "http/1.1"]}))]
+                  (let [{:keys [acontext]} (tls13/wrap-stream is os (tls13-ctx/->client-context {:server-names ["test.local"] :application-protocols ["http/2" "http/1.1"]}))]
                     (assert (= (select-keys @acontext [:stage :cipher-suite :named-group :accept-server-name? :application-protocol])
                                {:stage :connected
                                 :cipher-suite tls13-st/cipher-suite-tls-aes-128-gcm-sha256
@@ -28,7 +28,7 @@
                                 :accept-server-name? true
                                 :application-protocol "http/1.1"}))))
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri :application-protocols ["http/1.1"]}))]
+                  (let [{:keys [acontext]} (tls13/wrap-stream is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri :application-protocols ["http/1.1"]}))]
                     (assert (= (select-keys @acontext [:stage :cipher-suite :named-group :server-names :application-protocol])
                                {:stage :connected
                                 :cipher-suite tls13-st/cipher-suite-tls-aes-128-gcm-sha256
@@ -38,40 +38,40 @@
   (testing "handshake secp256r1"
     (is (some? (st/sim-conn
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->client-context {:named-groups [tls13-st/named-group-secp256r1]}))]
+                  (let [{:keys [acontext]} (tls13/wrap-stream is os (tls13-ctx/->client-context {:named-groups [tls13-st/named-group-secp256r1]}))]
                     (assert (= (select-keys @acontext [:stage :named-group])
                                {:stage :connected :named-group tls13-st/named-group-secp256r1}))))
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri}))]
+                  (let [{:keys [acontext]} (tls13/wrap-stream is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri}))]
                     (assert (= (select-keys @acontext [:stage :named-group])
                                {:stage :connected :named-group tls13-st/named-group-secp256r1}))))))))
   (testing "client auth"
     (is (some? (st/sim-conn
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->client-context {:client-certificate-list [{:certificate @cert}] :client-private-key @pri}))]
+                  (let [{:keys [acontext]} (tls13/wrap-stream is os (tls13-ctx/->client-context {:client-certificate-list [{:certificate @cert}] :client-private-key @pri}))]
                     (assert (= (select-keys @acontext [:stage :client-auth?])
                                {:stage :connected :client-auth? true}))))
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext]} (tls13/wrap is os (tls13-ctx/->server-context {:client-auth? true :server-certificate-list [{:certificate @cert}] :server-private-key @pri}))]
+                  (let [{:keys [acontext]} (tls13/wrap-stream is os (tls13-ctx/->server-context {:client-auth? true :server-certificate-list [{:certificate @cert}] :server-private-key @pri}))]
                     (assert (= (select-keys @acontext [:stage])
                                {:stage :connected}))))))))
   (testing "application data"
     (is (some? (st/sim-conn
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{is :input-stream os :output-stream} (tls13/wrap is os (tls13-ctx/->client-context nil))
+                  (let [{is :input-stream os :output-stream} (tls13/wrap-stream is os (tls13-ctx/->client-context nil))
                         data (b/rand 32)]
                     (st/write os data)
                     (st/flush os)
                     (assert (zero? (b/compare data (st/read-bytes is 32))))))
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{is :input-stream os :output-stream} (tls13/wrap is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri}))
+                  (let [{is :input-stream os :output-stream} (tls13/wrap-stream is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri}))
                         data (st/read-bytes is 32)]
                     (st/write os data)
                     (st/flush os)))))))
   (testing "key update"
     (is (some? (st/sim-conn
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext] is :input-stream os :output-stream} (tls13/wrap is os (tls13-ctx/->client-context nil))
+                  (let [{:keys [acontext] is :input-stream os :output-stream} (tls13/wrap-stream is os (tls13-ctx/->client-context nil))
                         data1 (b/rand 32)
                         data2 (b/rand 32)]
                     (st/write os data1)
@@ -81,7 +81,7 @@
                     (st/flush os)
                     (assert (zero? (b/compare (b/cat data1 data2) (st/read-bytes is 64))))))
                 (fn [{is :input-stream os :output-stream}]
-                  (let [{:keys [acontext] is :input-stream os :output-stream} (tls13/wrap is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri}))
+                  (let [{:keys [acontext] is :input-stream os :output-stream} (tls13/wrap-stream is os (tls13-ctx/->server-context {:server-certificate-list [{:certificate @cert}] :server-private-key @pri}))
                         data (st/read-bytes is 64)]
                     (st/write os data)
                     (st/flush os))))))))
