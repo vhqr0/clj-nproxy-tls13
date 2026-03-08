@@ -4,7 +4,58 @@
             [clj-nproxy.plugin.tls13.struct :as tls13-st]
             [clj-nproxy.plugin.tls13.crypto :as tls13-crypto]))
 
+(def default-signature-algorithms
+  [tls13-st/signature-scheme-ed25519
+   tls13-st/signature-scheme-ed448
+   tls13-st/signature-scheme-ecdsa-secp256r1-sha256
+   tls13-st/signature-scheme-ecdsa-secp384r1-sha384
+   tls13-st/signature-scheme-ecdsa-secp521r1-sha512
+   tls13-st/signature-scheme-ecdsa-sha1
+   tls13-st/signature-scheme-rsa-pkcs1-sha256
+   tls13-st/signature-scheme-rsa-pkcs1-sha384
+   tls13-st/signature-scheme-rsa-pkcs1-sha512
+   tls13-st/signature-scheme-rsa-pkcs1-sha1
+   tls13-st/signature-scheme-rsa-pss-rsae-sha256
+   tls13-st/signature-scheme-rsa-pss-rsae-sha384
+   tls13-st/signature-scheme-rsa-pss-rsae-sha512
+   tls13-st/signature-scheme-rsa-pss-pss-sha256
+   tls13-st/signature-scheme-rsa-pss-pss-sha384
+   tls13-st/signature-scheme-rsa-pss-pss-sha512])
+
+(def default-cipher-suites
+  [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
+   tls13-st/cipher-suite-tls-aes-256-gcm-sha384
+   tls13-st/cipher-suite-tls-chacha20-poly1305-sha256])
+
+(def default-named-groups
+  [tls13-st/named-group-x25519
+   tls13-st/named-group-x448
+   tls13-st/named-group-secp256r1
+   tls13-st/named-group-secp384r1
+   tls13-st/named-group-secp521r1])
+
+(def default-named-group
+  tls13-st/named-group-x25519)
+
+(def default-client-opts
+  {:mode                 :client
+   :stage                :wait-server-hello
+   :signature-algorithms default-signature-algorithms
+   :cipher-suites        default-cipher-suites
+   :named-groups         [default-named-group]})
+
+(def default-server-opts
+  {:mode                 :server
+   :stage                :wait-client-hello
+   :signature-algorithms default-signature-algorithms
+   :cipher-suites        default-cipher-suites
+   :named-groups         default-named-groups})
+
 (def vec-conj (fnil conj []))
+
+(defmulti recv-record
+  "Recv record, return new context."
+  (fn [context _type _content] (:stage context)))
 
 (defn pack-extension
   "Pack extension."
@@ -15,10 +66,6 @@
   "Find extension."
   [context extensions-key type]
   (->> (get context extensions-key) (filter #(= type (:extension-type %))) first :extension-data))
-
-(defmulti recv-record
-  "Recv record, return new context."
-  (fn [context _type _content] (:stage context)))
 
 (defn send-plaintext
   "Send plaintext."
@@ -314,22 +361,6 @@
 
 ;;;; client hello
 
-(def default-client-opts
-  {:mode                 :client
-   :stage                :wait-server-hello
-   :signature-algorithms [tls13-st/signature-scheme-ed25519
-                          tls13-st/signature-scheme-ed448
-                          tls13-st/signature-scheme-ecdsa-secp256r1-sha256
-                          tls13-st/signature-scheme-ecdsa-secp384r1-sha384
-                          tls13-st/signature-scheme-ecdsa-secp521r1-sha512
-                          tls13-st/signature-scheme-rsa-pkcs1-sha256
-                          tls13-st/signature-scheme-rsa-pkcs1-sha384
-                          tls13-st/signature-scheme-rsa-pkcs1-sha512]
-   :cipher-suites        [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
-                          tls13-st/cipher-suite-tls-aes-256-gcm-sha384
-                          tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
-   :named-groups         [tls13-st/named-group-x25519]})
-
 (defn init-client-key-shares
   "Init client key shares."
   [context]
@@ -555,26 +586,6 @@
 ;;; server
 
 ;;;; client hello
-
-(def default-server-opts
-  {:mode                 :server
-   :stage                :wait-client-hello
-   :signature-algorithms [tls13-st/signature-scheme-ed25519
-                          tls13-st/signature-scheme-ed448
-                          tls13-st/signature-scheme-ecdsa-secp256r1-sha256
-                          tls13-st/signature-scheme-ecdsa-secp384r1-sha384
-                          tls13-st/signature-scheme-ecdsa-secp521r1-sha512
-                          tls13-st/signature-scheme-rsa-pkcs1-sha256
-                          tls13-st/signature-scheme-rsa-pkcs1-sha384
-                          tls13-st/signature-scheme-rsa-pkcs1-sha512]
-   :cipher-suites        [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
-                          tls13-st/cipher-suite-tls-aes-256-gcm-sha384
-                          tls13-st/cipher-suite-tls-chacha20-poly1305-sha256]
-   :named-groups         [tls13-st/named-group-x25519
-                          tls13-st/named-group-x448
-                          tls13-st/named-group-secp256r1
-                          tls13-st/named-group-secp384r1
-                          tls13-st/named-group-secp521r1]})
 
 (defn ->server-context
   "Construct server context."
