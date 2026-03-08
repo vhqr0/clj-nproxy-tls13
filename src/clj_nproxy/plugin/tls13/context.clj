@@ -13,17 +13,12 @@
    tls13-st/signature-scheme-ecdsa-secp256r1-sha256
    tls13-st/signature-scheme-ecdsa-secp384r1-sha384
    tls13-st/signature-scheme-ecdsa-secp521r1-sha512
-   tls13-st/signature-scheme-ecdsa-sha1
-   tls13-st/signature-scheme-rsa-pkcs1-sha256
-   tls13-st/signature-scheme-rsa-pkcs1-sha384
-   tls13-st/signature-scheme-rsa-pkcs1-sha512
-   tls13-st/signature-scheme-rsa-pkcs1-sha1
    tls13-st/signature-scheme-rsa-pss-rsae-sha256
    tls13-st/signature-scheme-rsa-pss-rsae-sha384
    tls13-st/signature-scheme-rsa-pss-rsae-sha512
-   tls13-st/signature-scheme-rsa-pss-pss-sha256
-   tls13-st/signature-scheme-rsa-pss-pss-sha384
-   tls13-st/signature-scheme-rsa-pss-pss-sha512])
+   tls13-st/signature-scheme-rsa-pkcs1-sha256
+   tls13-st/signature-scheme-rsa-pkcs1-sha384
+   tls13-st/signature-scheme-rsa-pkcs1-sha512])
 
 (def default-cipher-suites
   [tls13-st/cipher-suite-tls-aes-128-gcm-sha256
@@ -277,12 +272,11 @@
                           :client tls13-st/client-signature-context-string
                           :server tls13-st/server-signature-context-string)
                         (apply tls13-crypto/digest cipher-suite handshake-msgs))
-        signature (tls13-crypto/sign certificate private-key signature-data)]
+        algorithm (tls13-crypto/cert->signature-scheme certificate)
+        signature (tls13-crypto/sign algorithm private-key signature-data)]
     (send-handshake-ciphertext
      context tls13-st/handshake-type-certificate-verify
-     (st/pack tls13-st/st-handshake-certificate-verify
-              {:algorithm (tls13-crypto/cert->signature-scheme certificate)
-               :signature signature}))))
+     (st/pack tls13-st/st-handshake-certificate-verify {:algorithm algorithm :signature signature}))))
 
 (defn send-auth
   "Send auth."
@@ -330,14 +324,13 @@
                                :server (:client-certificate-list context))
             certificate (:certificate (first certificate-list))
             {:keys [algorithm signature]} (st/unpack tls13-st/st-handshake-certificate-verify msg-data)]
-        (if (and (contains? (set signature-algorithms) algorithm)
-                 (= algorithm (tls13-crypto/cert->signature-scheme certificate)))
+        (if (contains? (set signature-algorithms) algorithm)
           (let [signature-data (tls13-st/pack-signature-data
                                 (case mode
                                   :client tls13-st/server-signature-context-string
                                   :server tls13-st/client-signature-context-string)
                                 (apply tls13-crypto/digest cipher-suite (butlast handshake-msgs)))]
-            (if (tls13-crypto/verify certificate signature-data signature)
+            (if (tls13-crypto/verify algorithm (tls13-crypto/cert->pub certificate) signature-data signature)
               context
               (throw (ex-info "invalid signature" {:reason ::invalid-signature}))))
           (throw (ex-info "invalid signature algorithm" {:reason ::invalid-signature-algorithm :signature-algorithm algorithm}))))

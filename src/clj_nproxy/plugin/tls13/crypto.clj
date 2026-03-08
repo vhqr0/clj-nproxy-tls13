@@ -19,7 +19,7 @@
 
 ;;; cipher suites
 
-(def sha256-base-suite
+(def cipher-suite-base-sha256
   {:digest-fn       crypto/sha256
    :digest-size     32
    :hmac-fn         crypto/hmac-sha256
@@ -27,7 +27,7 @@
    :hkdf-expand-fn  crypto/hkdf-expand-sha256
    :hkdf-extract-fn crypto/hkdf-extract-sha256})
 
-(def sha384-base-suite
+(def cipher-suite-base-sha384
   {:digest-fn       crypto/sha384
    :digest-size     48
    :hmac-fn         crypto/hmac-sha384
@@ -35,27 +35,27 @@
    :hkdf-expand-fn  crypto/hkdf-expand-sha384
    :hkdf-extract-fn crypto/hkdf-extract-sha384})
 
-(def aes-128-gcm-sha256-suite
+(def cipher-suite-tls-aes-128-gcm-sha256
   (merge
-   sha256-base-suite
+   cipher-suite-base-sha256
    {:aead-encrypt-fn crypto/aesgcm-encrypt
     :aead-decrypt-fn crypto/aesgcm-decrypt
     :aead-key-size   16
     :aead-iv-size    12
     :aead-tag-size   16}))
 
-(def aes-256-gcm-sha384-suite
+(def cipher-suite-tls-aes-256-gcm-sha384
   (merge
-   sha384-base-suite
+   cipher-suite-base-sha384
    {:aead-encrypt-fn crypto/aesgcm-encrypt
     :aead-decrypt-fn crypto/aesgcm-decrypt
     :aead-key-size   32
     :aead-iv-size    12
     :aead-tag-size   16}))
 
-(def chacha20-poly1305-sha256-suite
+(def cipher-suite-tls-chacha20-poly1305-sha256
   (merge
-   sha256-base-suite
+   cipher-suite-base-sha256
    {:aead-encrypt-fn crypto/chacha20poly1305-encrypt
     :aead-decrypt-fn crypto/chacha20poly1305-decrypt
     :aead-key-size   16
@@ -63,9 +63,9 @@
     :aead-tag-size   16}))
 
 (def cipher-suite-map
-  {tls13-st/cipher-suite-tls-aes-128-gcm-sha256       aes-128-gcm-sha256-suite
-   tls13-st/cipher-suite-tls-aes-256-gcm-sha384       aes-256-gcm-sha384-suite
-   tls13-st/cipher-suite-tls-chacha20-poly1305-sha256 chacha20-poly1305-sha256-suite})
+  {tls13-st/cipher-suite-tls-aes-128-gcm-sha256       cipher-suite-tls-aes-128-gcm-sha256
+   tls13-st/cipher-suite-tls-aes-256-gcm-sha384       cipher-suite-tls-aes-256-gcm-sha384
+   tls13-st/cipher-suite-tls-chacha20-poly1305-sha256 cipher-suite-tls-chacha20-poly1305-sha256})
 
 (defn get-cipher-suite
   "Get cipher suite."
@@ -224,62 +224,42 @@
 
 ;;; named groups
 
-(def secp256r1-group
+(def named-group-secp256r1
   {:gen-fn        crypto/secp256r1-gen
    :agreement-fn  crypto/secp256r1-agreement
    :pub->bytes-fn ecformat/secp256r1-pub->bytes
    :bytes->pub-fn ecformat/bytes->secp256r1-pub})
 
-(def secp384r1-group
+(def named-group-secp384r1
   {:gen-fn        crypto/secp384r1-gen
    :agreement-fn  crypto/secp384r1-agreement
    :pub->bytes-fn ecformat/secp384r1-pub->bytes
    :bytes->pub-fn ecformat/bytes->secp384r1-pub})
 
-(def secp521r1-group
+(def named-group-secp521r1
   {:gen-fn        crypto/secp521r1-gen
    :agreement-fn  crypto/secp521r1-agreement
    :pub->bytes-fn ecformat/secp521r1-pub->bytes
    :bytes->pub-fn ecformat/bytes->secp521r1-pub})
 
-(def x25519-group
+(def named-group-x25519
   {:gen-fn        crypto/x25519-gen
    :agreement-fn  crypto/x25519-agreement
    :pub->bytes-fn ecformat/x25519-pub->bytes
    :bytes->pub-fn ecformat/bytes->x25519-pub})
 
-(def x448-group
+(def named-group-x448
   {:gen-fn        crypto/x448-gen
    :agreement-fn  crypto/x448-agreement
    :pub->bytes-fn ecformat/x448-pub->bytes
    :bytes->pub-fn ecformat/bytes->x448-pub})
 
 (def named-group-map
-  {tls13-st/named-group-secp256r1 secp256r1-group
-   tls13-st/named-group-secp384r1 secp384r1-group
-   tls13-st/named-group-secp521r1 secp521r1-group
-   tls13-st/named-group-x25519    x25519-group
-   tls13-st/named-group-x448      x448-group})
-
-(defn sim-agreement
-  "Simulate key agreement."
-  [group]
-  (let [{:keys [gen-fn agreement-fn pub->bytes-fn bytes->pub-fn]} group
-        [pri1 pub1] (gen-fn)
-        [pri2 pub2] (gen-fn)]
-    (zero?
-     (b/compare
-      (agreement-fn pri1 (-> pub2 pub->bytes-fn bytes->pub-fn))
-      (agreement-fn pri2 (-> pub1 pub->bytes-fn bytes->pub-fn))))))
-
-^:rct/test
-(comment
-  (sim-agreement secp256r1-group) ; => true
-  (sim-agreement secp384r1-group) ; => true
-  (sim-agreement secp521r1-group) ; => true
-  (sim-agreement x25519-group) ; => true
-  (sim-agreement x448-group) ; => true
-  )
+  {tls13-st/named-group-secp256r1 named-group-secp256r1
+   tls13-st/named-group-secp384r1 named-group-secp384r1
+   tls13-st/named-group-secp521r1 named-group-secp521r1
+   tls13-st/named-group-x25519    named-group-x25519
+   tls13-st/named-group-x448      named-group-x448})
 
 (defn get-named-group
   "Get named group."
@@ -309,7 +289,50 @@
         pub (bytes->pub-fn pub-bytes)]
     (agreement-fn pri pub)))
 
-;;; signature algorithms
+;;; signature schemes
+
+(def signature-scheme-ed25519                {:sign-fn crypto/ed25519-sign             :verify-fn crypto/ed25519-verify})
+(def signature-scheme-ed448                  {:sign-fn crypto/ed448-sign               :verify-fn crypto/ed448-verify})
+(def signature-scheme-ecdsa-secp256r1-sha256 {:sign-fn crypto/secp256r1-sha256-sign    :verify-fn crypto/secp256r1-sha256-verify})
+(def signature-scheme-ecdsa-secp384r1-sha384 {:sign-fn crypto/secp384r1-sha384-sign    :verify-fn crypto/secp384r1-sha384-verify})
+(def signature-scheme-ecdsa-secp521r1-sha512 {:sign-fn crypto/secp521r1-sha512-sign    :verify-fn crypto/secp521r1-sha512-verify})
+(def signature-scheme-rsa-pss-rsae-sha256    {:sign-fn crypto/rsa-pss-rsae-sha256-sign :verify-fn crypto/rsa-pss-rsae-sha256-verify})
+(def signature-scheme-rsa-pss-rsae-sha384    {:sign-fn crypto/rsa-pss-rsae-sha384-sign :verify-fn crypto/rsa-pss-rsae-sha384-verify})
+(def signature-scheme-rsa-pss-rsae-sha512    {:sign-fn crypto/rsa-pss-rsae-sha512-sign :verify-fn crypto/rsa-pss-rsae-sha512-verify})
+(def signature-scheme-rsa-pkcs1-sha256       {:sign-fn crypto/rsa-pkcs1-sha256-sign    :verify-fn crypto/rsa-pkcs1-sha256-verify})
+(def signature-scheme-rsa-pkcs1-sha384       {:sign-fn crypto/rsa-pkcs1-sha384-sign    :verify-fn crypto/rsa-pkcs1-sha384-verify})
+(def signature-scheme-rsa-pkcs1-sha512       {:sign-fn crypto/rsa-pkcs1-sha512-sign    :verify-fn crypto/rsa-pkcs1-sha512-verify})
+
+(def signature-scheme-map
+  {tls13-st/signature-scheme-ed25519                signature-scheme-ed25519
+   tls13-st/signature-scheme-ed448                  signature-scheme-ed448
+   tls13-st/signature-scheme-ecdsa-secp256r1-sha256 signature-scheme-ecdsa-secp256r1-sha256
+   tls13-st/signature-scheme-ecdsa-secp384r1-sha384 signature-scheme-ecdsa-secp384r1-sha384
+   tls13-st/signature-scheme-ecdsa-secp521r1-sha512 signature-scheme-ecdsa-secp521r1-sha512
+   tls13-st/signature-scheme-rsa-pss-rsae-sha256    signature-scheme-rsa-pss-rsae-sha256
+   tls13-st/signature-scheme-rsa-pss-rsae-sha384    signature-scheme-rsa-pss-rsae-sha384
+   tls13-st/signature-scheme-rsa-pss-rsae-sha512    signature-scheme-rsa-pss-rsae-sha512
+   tls13-st/signature-scheme-rsa-pkcs1-sha256       signature-scheme-rsa-pkcs1-sha256
+   tls13-st/signature-scheme-rsa-pkcs1-sha384       signature-scheme-rsa-pkcs1-sha384
+   tls13-st/signature-scheme-rsa-pkcs1-sha512       signature-scheme-rsa-pkcs1-sha512})
+
+(defn get-signature-scheme
+  "Get signature scheme."
+  [signature-scheme]
+  (or (get signature-scheme-map signature-scheme)
+      (throw (ex-info "invalid signature scheme" {:reason ::invalid-signature-scheme :signature-scheme signature-scheme}))))
+
+(defn sign
+  "Sign signature."
+  ^bytes [signature-scheme ^PrivateKey pri ^bytes data]
+  (let [{:keys [sign-fn]} (get-signature-scheme signature-scheme)]
+    (sign-fn pri data)))
+
+(defn verify
+  "Verify signature."
+  ^Boolean [signature-scheme ^PublicKey pub ^bytes data ^bytes sig]
+  (let [{:keys [verify-fn]} (get-signature-scheme signature-scheme)]
+    (verify-fn pub data sig)))
 
 (def signature-algo->scheme
   {"Ed25519"         tls13-st/signature-scheme-ed25519
@@ -317,9 +340,9 @@
    "SHA256withECDSA" tls13-st/signature-scheme-ecdsa-secp256r1-sha256
    "SHA384withECDSA" tls13-st/signature-scheme-ecdsa-secp384r1-sha384
    "SHA512withECDSA" tls13-st/signature-scheme-ecdsa-secp521r1-sha512
-   "SHA256withRSA"   tls13-st/signature-scheme-rsa-pkcs1-sha256
-   "SHA384withRSA"   tls13-st/signature-scheme-rsa-pkcs1-sha384
-   "SHA512withRSA"   tls13-st/signature-scheme-rsa-pkcs1-sha512})
+   "SHA256withRSA"   tls13-st/signature-scheme-rsa-pss-rsae-sha256
+   "SHA384withRSA"   tls13-st/signature-scheme-rsa-pss-rsae-sha384
+   "SHA512withRSA"   tls13-st/signature-scheme-rsa-pss-rsae-sha512})
 
 (defn cert->signature-scheme
   "Get certificate signature scheme."
@@ -328,15 +351,7 @@
     (or (get signature-algo->scheme algo)
         (throw (ex-info "invalid certificate algorithm" {:reason ::invalid-certificate-algorithm :certificate-algorithm algo})))))
 
-(defn sign
-  "Sign signature."
-  ^bytes [^X509Certificate cert ^PrivateKey pri ^bytes data]
-  (let [algo (.getSigAlgName cert)]
-    (crypto/sign algo pri data)))
-
-(defn verify
-  "Verify signature."
-  ^Boolean [^X509Certificate cert ^bytes data ^bytes sig]
-  (let [algo (.getSigAlgName cert)
-        ^PublicKey pub (.getPublicKey cert)]
-    (crypto/verify algo pub data sig)))
+(defn cert->pub
+  "Get certificate public key."
+  ^PublicKey [^X509Certificate cert]
+  (.getPublicKey cert))
