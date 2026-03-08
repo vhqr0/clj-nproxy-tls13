@@ -1,8 +1,11 @@
 (ns clj-nproxy.plugin.tls13.context
   (:require [clj-nproxy.bytes :as b]
             [clj-nproxy.struct :as st]
+            [clj-nproxy.crypto.keystore :as ks]
             [clj-nproxy.plugin.tls13.struct :as tls13-st]
             [clj-nproxy.plugin.tls13.crypto :as tls13-crypto]))
+
+(set! clojure.core/*warn-on-reflection* true)
 
 (def default-signature-algorithms
   [tls13-st/signature-scheme-ed25519
@@ -261,7 +264,7 @@
              :certificate-list (->> certificate-list
                                     (map
                                      (fn [{:keys [certificate extensions]}]
-                                       {:cert-data (tls13-crypto/cert->bytes certificate)
+                                       {:cert-data (ks/cert->bytes certificate)
                                         :extensions extensions})))})))
 
 (defn send-certificate-verify
@@ -305,7 +308,7 @@
          certificate-list (->> certificate-list
                                (mapv
                                 (fn [{:keys [cert-data extensions]}]
-                                  {:certificate (tls13-crypto/bytes->cert cert-data)
+                                  {:certificate (ks/bytes->cert cert-data)
                                    :extensions extensions})))]
      (assoc context certificate-list-key certificate-list))))
 

@@ -6,6 +6,8 @@
 ;; RFC 6066 TLS Extensions
 ;; RFC 7301 TLS ALPN Extensions
 
+(set! clojure.core/*warn-on-reflection* true)
+
 (def st-uint24
   (-> (st/->st-bytes 3)
       (st/wrap

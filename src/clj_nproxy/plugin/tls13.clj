@@ -8,8 +8,8 @@
 (set! clojure.core/*warn-on-reflection* true)
 
 (defn handshake
-  "Do handshake, return new context."
-  [is os context]
+  "Do handshake on stream, return new context."
+  [{is :input-stream os :output-stream} context]
   (loop [context context]
     (let [{:keys [stage send-bytes]} context]
       (if (seq send-bytes)
@@ -64,10 +64,10 @@
 
 (defn wrap-stream
   "Wrap tls13 on stream."
-  ([is os context]
-   (wrap-stream is os context identity))
-  ([is os context handshake-callback]
-   (let [context (handshake is os context)
+  ([stream context]
+   (wrap-stream stream context identity))
+  ([{is :input-stream os :output-stream :as stream} context handshake-callback]
+   (let [context (handshake stream context)
          ;; valid server name, certificate list, etc
          context (handshake-callback context)
          acontext (atom context)]
