@@ -385,7 +385,7 @@
               (->> server-names
                    (map
                     (fn [server-name]
-                      {:name-type 0 :name server-name})))))))
+                      {:name-type tls13-st/name-type-host-name :name server-name})))))))
 
 (defn pack-client-extension-application-layer-protocol-negotiation
   "Pack application layer protocol negotiation extension."
@@ -609,12 +609,7 @@
   "Unpack server name extension."
   [context]
   (if-let [extension (find-extension context :client-extensions tls13-st/extension-type-server-name)]
-    (let [server-names (->> (st/unpack tls13-st/st-extension-server-name-client-hello extension)
-                            (map
-                             (fn [{:keys [name-type name]}]
-                               (if (= name-type 0)
-                                 name
-                                 (throw (ex-info "invalid server name type" {:reason ::invalid-server-name-type :name-type name-type}))))))]
+    (let [server-names (->> (st/unpack tls13-st/st-extension-server-name-client-hello extension) (map :name))]
       (merge context {:server-names server-names}))
     context))
 

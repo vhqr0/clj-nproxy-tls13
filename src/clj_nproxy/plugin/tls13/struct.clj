@@ -455,18 +455,28 @@
 
 ;;;; server name
 
+(def name-type-host-name 0)
+
+(def st-name-type st/st-ubyte)
+
 (def st-host-name (-> (st/->st-var-bytes st/st-ushort-be) st/wrap-str))
 
-(def st-server-name-host
+(def st-name
+  (fn [{:keys [name-type]}]
+    (condp = name-type
+      name-type-host-name st-host-name
+      (throw (ex-info "invalid name type" {:reason ::invalid-name-type :name-type name-type})))))
+
+(def st-server-name
   (st/keys
-   :name-type st/st-ubyte ; 0
-   :name st-host-name))
+   :name-type st-name-type
+   :name st-name))
 
-(def st-server-name-host-list
+(def st-server-name-list
   (-> (st/->st-var-bytes st/st-ushort-be)
-      (st/wrap-many-struct st-server-name-host)))
+      (st/wrap-many-struct st-server-name)))
 
-(def st-extension-server-name-client-hello st-server-name-host-list)
+(def st-extension-server-name-client-hello st-server-name-list)
 (def st-extension-server-name-server-hello st/st-null)
 
 ;;;; alpn
