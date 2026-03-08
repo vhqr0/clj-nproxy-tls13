@@ -167,6 +167,12 @@
   ([context content]
    (recv-ciphertext context :application-decryptor content)))
 
+(defn recv-alert
+  "Recv alert."
+  [content]
+  (let [{:keys [level description]} (st/unpack tls13-st/st-alert content)]
+    (throw (ex-info "alert" {:reason ::alert :level level :description description}))))
+
 (defn send-change-cipher-spec
   "Send change cipher spec."
   [context]
@@ -482,24 +488,27 @@
     (throw (ex-info "no selected key share" {:reason ::no-selected-key-share}))))
 
 (defmethod recv-record :wait-server-hello [context type content]
-  (let [[context msg-type msg-data] (recv-handshake-plaintext context type content)]
-    (condp = msg-type
-      tls13-st/handshake-type-server-hello
-      (let [{:keys [cipher-suites]} context
-            {:keys [random cipher-suite extensions]} (st/unpack tls13-st/st-handshake-server-hello msg-data)]
-        (if (contains? (set cipher-suites) cipher-suite)
-          (-> context
-              (merge
-               {:stage :wait-server-ccs-ee
-                :cipher-suite cipher-suite
-                :server-random random
-                :server-extensions extensions})
-              unpack-server-extension-supported-versions
-              unpack-server-extension-key-share
-              init-early-secret
-              init-handshake-secret)
-          (throw (ex-info "invalid cipher suite" {:reason ::invalid-cipher-suite :cipher-suite cipher-suite}))))
-      (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type})))))
+  (if (= type tls13-st/content-type-alert)
+    ;; throw client hello params error
+    (recv-alert content)
+    (let [[context msg-type msg-data] (recv-handshake-plaintext context type content)]
+      (condp = msg-type
+        tls13-st/handshake-type-server-hello
+        (let [{:keys [cipher-suites]} context
+              {:keys [random cipher-suite extensions]} (st/unpack tls13-st/st-handshake-server-hello msg-data)]
+          (if (contains? (set cipher-suites) cipher-suite)
+            (-> context
+                (merge
+                 {:stage :wait-server-ccs-ee
+                  :cipher-suite cipher-suite
+                  :server-random random
+                  :server-extensions extensions})
+                unpack-server-extension-supported-versions
+                unpack-server-extension-key-share
+                init-early-secret
+                init-handshake-secret)
+            (throw (ex-info "invalid cipher suite" {:reason ::invalid-cipher-suite :cipher-suite cipher-suite}))))
+        (throw (ex-info "invalid handshake type" {:reason ::invalid-handshake-type :handshake-type msg-type}))))))
 
 ;;;; server encrypted extensions
 
