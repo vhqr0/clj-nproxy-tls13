@@ -435,7 +435,7 @@
 
 (def st-psk-identity
   (st/keys
-   :identity st/st-ushort-be
+   :identity (st/->st-var-bytes st/st-ushort-be)
    :obfuscated-ticket-age st/st-uint-be))
 
 (def st-psk-identity-list

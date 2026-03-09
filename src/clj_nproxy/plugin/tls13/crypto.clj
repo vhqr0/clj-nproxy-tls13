@@ -58,7 +58,7 @@
    cipher-suite-base-sha256
    {:aead-encrypt-fn crypto/chacha20poly1305-encrypt
     :aead-decrypt-fn crypto/chacha20poly1305-decrypt
-    :aead-key-size   16
+    :aead-key-size   32
     :aead-iv-size    12
     :aead-tag-size   16}))
 

@@ -681,14 +681,14 @@
 (defn send-server-hello
   "Send server hello."
   [context]
-  (let [{:keys [server-random cipher-suite server-extensions]} context]
+  (let [{:keys [server-random cipher-suite server-extensions legacy-session-id]} context]
     (send-handshake-plaintext
      context
      tls13-st/handshake-type-server-hello
      (st/pack tls13-st/st-handshake-server-hello
               {:legacy-version tls13-st/version-tls12
                :random server-random
-               :legacy-session-id-echo (byte-array 0)
+               :legacy-session-id-echo legacy-session-id
                :cipher-suite cipher-suite
                :legacy-compression-method tls13-st/compression-method-null
                :extensions server-extensions}))))
@@ -736,14 +736,15 @@
       tls13-st/handshake-type-client-hello
       (let [{:keys [client-auth?]} context
             server-cipher-suites (set (:cipher-suites context))
-            {:keys [random cipher-suites extensions]} (st/unpack tls13-st/st-handshake-client-hello msg-data)]
+            {:keys [random cipher-suites extensions legacy-session-id]} (st/unpack tls13-st/st-handshake-client-hello msg-data)]
         (if-let [cipher-suite (->> cipher-suites (some server-cipher-suites))]
           (-> context
               (merge
                {:stage (if client-auth? :wait-client-ccs-cert :wait-client-ccs-finished)
                 :cipher-suite cipher-suite
                 :client-random random
-                :client-extensions extensions})
+                :client-extensions extensions
+                :legacy-session-id legacy-session-id})
               init-random
               unpack-client-extension-supported-versions
               unpack-client-extension-key-share
